@@ -73,6 +73,9 @@ const MAX_MARKER_MATCHES_PER_CHUNK: usize = 4096;
 const MAX_PREFIX_HITS_PER_CHUNK: usize = 4096;
 const FNV1A64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV1A64_PRIME: u64 = 0x100000001b3;
+const RUNTIME_TABLE_OFFSET_FROM_SINGLETON: usize = 0x8;
+const RUNTIME_TABLE_SIZE: usize = 0x38;
+const RUNTIME_TABLE_MAX_MASK: u64 = 0x00ff_ffff;
 const RUNTIME_SINGLETON_ACCESSOR_PATTERN: &[Option<u8>] = &[
     Some(0x48),
     Some(0x83),
@@ -789,6 +792,42 @@ fn find_runtime_singleton_slots(buffer: &[u8], base_address: usize) -> Vec<usize
             let slot = resolve_rip_relative_address(base_address.saturating_add(i), 7, disp);
             push_unique_runtime_slot(&mut out, slot);
         }
+    }
+
+    out
+}
+
+fn runtime_table_header_bytes_look_plausible(table: &[u8]) -> bool {
+    if table.len() < RUNTIME_TABLE_SIZE {
+        return false;
+    }
+
+    let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap());
+    let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap());
+    let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
+
+    sentinel != 0
+        && buckets != 0
+        && sentinel != buckets
+        && (sentinel & 0x7) == 0
+        && (buckets & 0x7) == 0
+        && mask != 0
+        && mask <= RUNTIME_TABLE_MAX_MASK
+}
+
+fn find_runtime_table_headers(buffer: &[u8], base_address: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    if buffer.len() < RUNTIME_TABLE_SIZE {
+        return out;
+    }
+
+    let aligned_start = (8usize.wrapping_sub(base_address & 0x7)) & 0x7;
+    let mut i = aligned_start;
+    while i + RUNTIME_TABLE_SIZE <= buffer.len() {
+        if runtime_table_header_bytes_look_plausible(&buffer[i..i + RUNTIME_TABLE_SIZE]) {
+            push_unique_runtime_slot(&mut out, base_address.saturating_add(i));
+        }
+        i = i.saturating_add(8);
     }
 
     out
@@ -1815,15 +1854,31 @@ mod windows_impl {
     #[derive(Clone, Copy)]
     struct RuntimeRegistryCandidate {
         singleton: usize,
-        slot: usize,
+        slot: Option<usize>,
+        table: usize,
+        source: &'static str,
     }
 
-    const RUNTIME_TABLE_SIZE: usize = 0x38;
+    #[derive(Clone)]
+    struct RuntimeModuleInfo {
+        base: usize,
+        size: usize,
+        path: Option<String>,
+    }
+
     const RUNTIME_NODE_SIZE: usize = 0x38;
     const RUNTIME_VALUE_PTR_OFFSET: usize = 0xC0;
     const RUNTIME_MAX_CHAIN_STEPS: usize = 128;
     const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
     const RUNTIME_PATTERN_SCAN_CAP: usize = 256 * 1024 * 1024;
+    const RUNTIME_REGISTRY_PROBE_NAMES: &[&str] = &[
+        "DFIntS2PhysicsSenderRate",
+        "DFFlagDebugDrawBroadPhaseAABBs",
+        "FIntCameraFarZPlane",
+        "DFIntMinClientSimulationRadius",
+        "DFIntMaxClientSimulationRadius",
+        "FFlagDebugUseCustomSimRadius",
+    ];
 
     fn read_process_exact(handle: HANDLE, addr: usize, out: &mut [u8]) -> bool {
         let mut bytes_read: usize = 0;
@@ -1880,32 +1935,183 @@ mod windows_impl {
         Some((info.lpBaseOfDll as usize, info.SizeOfImage as usize))
     }
 
-    fn discover_runtime_registry_candidates(handle: HANDLE) -> Vec<RuntimeRegistryCandidate> {
-        let (module_base, module_size) = match main_module_info_windows(handle) {
-            Some(info) => info,
-            None => return Vec::new(),
+    fn module_path_windows(handle: HANDLE, hmod: HMODULE) -> Option<String> {
+        let mut buf: Vec<u16> = vec![0; MAX_PATH as usize];
+        let mut len =
+            unsafe { GetModuleFileNameExW(handle, hmod, buf.as_mut_ptr(), buf.len() as u32) };
+        while len != 0 && (len as usize) == buf.len() {
+            let new_size = buf.len().saturating_mul(2).min(65_536);
+            if new_size <= buf.len() {
+                break;
+            }
+            buf.resize(new_size, 0);
+            len = unsafe { GetModuleFileNameExW(handle, hmod, buf.as_mut_ptr(), buf.len() as u32) };
+        }
+        (len != 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
+    }
+
+    fn runtime_modules_windows(handle: HANDLE) -> Vec<RuntimeModuleInfo> {
+        let mut modules: Vec<HMODULE> = vec![std::ptr::null_mut(); 1024];
+        let mut needed = 0u32;
+
+        let ok = unsafe {
+            EnumProcessModulesEx(
+                handle,
+                modules.as_mut_ptr(),
+                (mem::size_of::<HMODULE>() * modules.len()) as u32,
+                &mut needed,
+                LIST_MODULES_ALL,
+            )
         };
-        let scan_size = module_size.min(RUNTIME_PATTERN_SCAN_CAP);
-        let overlap = RUNTIME_SINGLETON_ACCESSOR_PATTERN.len().saturating_sub(1);
+        if ok == 0 {
+            return main_module_info_windows(handle)
+                .map(|(base, size)| {
+                    vec![RuntimeModuleInfo {
+                        base,
+                        size,
+                        path: None,
+                    }]
+                })
+                .unwrap_or_default();
+        }
+
+        let count = needed as usize / mem::size_of::<HMODULE>();
+        if count > modules.len() {
+            modules.resize(count.min(256 * 1024), std::ptr::null_mut());
+            needed = 0;
+            let ok = unsafe {
+                EnumProcessModulesEx(
+                    handle,
+                    modules.as_mut_ptr(),
+                    (mem::size_of::<HMODULE>() * modules.len()) as u32,
+                    &mut needed,
+                    LIST_MODULES_ALL,
+                )
+            };
+            if ok == 0 {
+                return main_module_info_windows(handle)
+                    .map(|(base, size)| {
+                        vec![RuntimeModuleInfo {
+                            base,
+                            size,
+                            path: None,
+                        }]
+                    })
+                    .unwrap_or_default();
+            }
+        }
+
+        let count = (needed as usize / mem::size_of::<HMODULE>()).min(modules.len());
+        let mut out = Vec::new();
+        for &hmod in modules.iter().take(count) {
+            if hmod.is_null() {
+                continue;
+            }
+            let mut info: MODULEINFO = unsafe { mem::zeroed() };
+            let ok = unsafe {
+                GetModuleInformation(handle, hmod, &mut info, mem::size_of::<MODULEINFO>() as u32)
+            };
+            if ok == 0 || info.lpBaseOfDll.is_null() || info.SizeOfImage == 0 {
+                continue;
+            }
+            out.push(RuntimeModuleInfo {
+                base: info.lpBaseOfDll as usize,
+                size: info.SizeOfImage as usize,
+                path: module_path_windows(handle, hmod),
+            });
+        }
+        out
+    }
+
+    fn runtime_module_should_scan(module: &RuntimeModuleInfo, index: usize) -> bool {
+        index == 0
+            || module
+                .path
+                .as_deref()
+                .map(|path| path.to_lowercase().contains("roblox"))
+                .unwrap_or(false)
+    }
+
+    fn push_runtime_registry_candidate(
+        candidates: &mut Vec<RuntimeRegistryCandidate>,
+        singleton: usize,
+        slot: Option<usize>,
+        source: &'static str,
+    ) {
+        if candidates
+            .iter()
+            .any(|candidate| candidate.singleton == singleton)
+        {
+            return;
+        }
+        candidates.push(RuntimeRegistryCandidate {
+            singleton,
+            slot,
+            table: singleton.saturating_add(RUNTIME_TABLE_OFFSET_FROM_SINGLETON),
+            source,
+        });
+    }
+
+    fn runtime_registry_has_probe_flag(handle: HANDLE, singleton: usize) -> bool {
+        RUNTIME_REGISTRY_PROBE_NAMES
+            .iter()
+            .any(|name| lookup_runtime_flag_entry(handle, singleton, name).is_some())
+    }
+
+    fn runtime_candidates_have_probe(
+        handle: HANDLE,
+        candidates: &[RuntimeRegistryCandidate],
+    ) -> bool {
+        candidates
+            .iter()
+            .any(|candidate| runtime_registry_has_probe_flag(handle, candidate.singleton))
+    }
+
+    fn discover_runtime_registry_candidates_in_module(
+        handle: HANDLE,
+        module: &RuntimeModuleInfo,
+        candidates: &mut Vec<RuntimeRegistryCandidate>,
+    ) {
+        let scan_size = module.size.min(RUNTIME_PATTERN_SCAN_CAP);
+        let overlap = RUNTIME_SINGLETON_ACCESSOR_PATTERN
+            .len()
+            .saturating_sub(1)
+            .max(RUNTIME_TABLE_SIZE.saturating_sub(1));
         let mut scratch = vec![0u8; RUNTIME_PATTERN_SCAN_CHUNK + overlap];
-        let mut candidates = Vec::new();
         let mut offset = 0usize;
 
         while offset < scan_size {
             let size = (scan_size - offset).min(RUNTIME_PATTERN_SCAN_CHUNK + overlap);
-            let addr = module_base.saturating_add(offset);
+            let addr = module.base.saturating_add(offset);
             if read_process_exact(handle, addr, &mut scratch[..size]) {
                 for slot in find_runtime_singleton_slots(&scratch[..size], addr) {
                     if let Some(singleton) = read_process_u64(handle, slot)
                         .and_then(|p| usize::try_from(p).ok())
                         .filter(|&p| p != 0 && runtime_table_header_looks_valid(handle, p))
                     {
-                        if !candidates
-                            .iter()
-                            .any(|c: &RuntimeRegistryCandidate| c.singleton == singleton)
-                        {
-                            candidates.push(RuntimeRegistryCandidate { singleton, slot });
-                        }
+                        push_runtime_registry_candidate(
+                            candidates,
+                            singleton,
+                            Some(slot),
+                            "RIP-relative singleton load",
+                        );
+                    }
+                }
+
+                for table in find_runtime_table_headers(&scratch[..size], addr) {
+                    if table < RUNTIME_TABLE_OFFSET_FROM_SINGLETON {
+                        continue;
+                    }
+                    let singleton = table - RUNTIME_TABLE_OFFSET_FROM_SINGLETON;
+                    if runtime_table_header_looks_valid(handle, singleton)
+                        && runtime_registry_has_probe_flag(handle, singleton)
+                    {
+                        push_runtime_registry_candidate(
+                            candidates,
+                            singleton,
+                            None,
+                            "registry table header scan",
+                        );
                     }
                 }
             }
@@ -1915,26 +2121,49 @@ mod windows_impl {
             }
             offset = offset.saturating_add(advance);
         }
+    }
+
+    fn discover_runtime_registry_candidates(handle: HANDLE) -> Vec<RuntimeRegistryCandidate> {
+        let modules = runtime_modules_windows(handle);
+        let mut candidates = Vec::new();
+
+        for (index, module) in modules.iter().enumerate() {
+            if runtime_module_should_scan(module, index) {
+                discover_runtime_registry_candidates_in_module(handle, module, &mut candidates);
+                if runtime_candidates_have_probe(handle, &candidates) {
+                    break;
+                }
+            }
+        }
+
+        if !runtime_candidates_have_probe(handle, &candidates) {
+            for (index, module) in modules.iter().enumerate() {
+                if !runtime_module_should_scan(module, index) {
+                    discover_runtime_registry_candidates_in_module(handle, module, &mut candidates);
+                    if runtime_candidates_have_probe(handle, &candidates) {
+                        break;
+                    }
+                }
+                if index >= 64 {
+                    break;
+                }
+            }
+        }
 
         candidates
     }
 
     fn runtime_table_header_looks_valid(handle: HANDLE, singleton: usize) -> bool {
         let mut table = [0u8; RUNTIME_TABLE_SIZE];
-        if !read_process_exact(handle, singleton.saturating_add(0x8), &mut table) {
+        if !read_process_exact(
+            handle,
+            singleton.saturating_add(RUNTIME_TABLE_OFFSET_FROM_SINGLETON),
+            &mut table,
+        ) {
             return false;
         }
 
-        let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap());
-        let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap());
-        let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
-        sentinel != 0
-            && buckets != 0
-            && (sentinel & 0x7) == 0
-            && (buckets & 0x7) == 0
-            && mask != 0
-            && mask <= 0x00ff_ffff
-            && (mask & mask.saturating_add(1)) == 0
+        runtime_table_header_bytes_look_plausible(&table)
     }
 
     fn remote_node_string_matches(
@@ -1974,12 +2203,17 @@ mod windows_impl {
         flag_name: &str,
     ) -> Option<usize> {
         let mut table = [0u8; RUNTIME_TABLE_SIZE];
-        read_process_exact(handle, singleton.saturating_add(0x8), &mut table).then_some(())?;
+        read_process_exact(
+            handle,
+            singleton.saturating_add(RUNTIME_TABLE_OFFSET_FROM_SINGLETON),
+            &mut table,
+        )
+        .then_some(())?;
 
         let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap()) as usize;
         let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap()) as usize;
         let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
-        if buckets == 0 || mask == 0 || mask > 0x00ff_ffff {
+        if buckets == 0 || mask == 0 || mask > RUNTIME_TABLE_MAX_MASK {
             return None;
         }
 
@@ -1988,31 +2222,35 @@ mod windows_impl {
         let mut bucket = [0u8; 16];
         read_process_exact(handle, bucket_addr, &mut bucket).then_some(())?;
 
-        let chain_end = u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
-        let mut current = u64::from_le_bytes(bucket[0x08..0x10].try_into().unwrap()) as usize;
-        if current == 0 || current == sentinel {
-            return None;
-        }
+        let first = u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
+        let second = u64::from_le_bytes(bucket[0x08..0x10].try_into().unwrap()) as usize;
+        let orders = [(second, first), (first, second)];
 
-        for _ in 0..RUNTIME_MAX_CHAIN_STEPS {
-            let mut node = [0u8; RUNTIME_NODE_SIZE];
-            if !read_process_exact(handle, current, &mut node) {
-                return None;
+        for (mut current, chain_end) in orders {
+            if current == 0 || current == sentinel {
+                continue;
             }
 
-            if remote_node_string_matches(handle, current, &node, flag_name) {
-                let entry = u64::from_le_bytes(node[0x30..0x38].try_into().unwrap()) as usize;
-                return (entry != 0).then_some(entry);
-            }
+            for _ in 0..RUNTIME_MAX_CHAIN_STEPS {
+                let mut node = [0u8; RUNTIME_NODE_SIZE];
+                if !read_process_exact(handle, current, &mut node) {
+                    break;
+                }
 
-            if current == chain_end {
-                break;
+                if remote_node_string_matches(handle, current, &node, flag_name) {
+                    let entry = u64::from_le_bytes(node[0x30..0x38].try_into().unwrap()) as usize;
+                    return (entry != 0).then_some(entry);
+                }
+
+                if current == chain_end {
+                    break;
+                }
+                let next = u64::from_le_bytes(node[0x08..0x10].try_into().unwrap()) as usize;
+                if next == 0 || next == current {
+                    break;
+                }
+                current = next;
             }
-            let next = u64::from_le_bytes(node[0x08..0x10].try_into().unwrap()) as usize;
-            if next == 0 || next == current {
-                break;
-            }
-            current = next;
         }
 
         None
@@ -2026,7 +2264,7 @@ mod windows_impl {
                 ScanVerdict::Inconclusive,
                 "Live FastFlag registry could not be resolved",
                 Some(format!(
-                    "PID: {} | Scanned Roblox main module for strict accessor and Lorno-style RIP-relative singleton loads, but no validated registry table was found",
+                    "PID: {} | Scanned Roblox image modules for strict accessors, Lorno-style RIP-relative singleton loads, and in-memory registry table headers, but no validated FastFlag table was found",
                     pid
                 )),
             )];
@@ -2074,10 +2312,18 @@ mod windows_impl {
                         rule.name,
                         runtime_value_label(rule.value)
                     ),
-                    Some(format!(
-                        "PID: {} | Singleton: 0x{:X} via RIP slot 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
-                        pid, candidate.singleton, candidate.slot, entry, value_ptr
-                    )),
+                    Some({
+                        let origin = candidate
+                            .slot
+                            .map(|slot| format!("{} at slot 0x{:X}", candidate.source, slot))
+                            .unwrap_or_else(|| {
+                                format!("{} at table 0x{:X}", candidate.source, candidate.table)
+                            });
+                        format!(
+                            "PID: {} | Singleton: 0x{:X} via {} | Registry entry: 0x{:X} | Value address: 0x{:X} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                            pid, candidate.singleton, origin, entry, value_ptr
+                        )
+                    }),
                 ));
             }
             if !findings.is_empty() {
@@ -2095,6 +2341,17 @@ mod windows_impl {
                     pid,
                     candidates.len(),
                     inspected
+                )),
+            ));
+        } else if findings.is_empty() {
+            findings.push(ScanFinding::new(
+                "memory_scanner",
+                ScanVerdict::Inconclusive,
+                "Live FastFlag registry candidate found, but tracked entries could not be read",
+                Some(format!(
+                    "PID: {} | Singleton candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable",
+                    pid,
+                    candidates.len()
                 )),
             ));
         }
@@ -3300,6 +3557,29 @@ mod tests {
         buffer.extend_from_slice(&[0x4C, 0x8D, 0x05, 0, 0, 0, 0]);
 
         assert_eq!(find_runtime_singleton_slots(&buffer, base), vec![slot]);
+    }
+
+    #[test]
+    fn runtime_table_header_locator_accepts_plausible_aligned_header() {
+        let base = 0x3000_0000usize;
+        let table = base + 16;
+        let mut buffer = vec![0u8; 16 + RUNTIME_TABLE_SIZE + 8];
+        buffer[16..24].copy_from_slice(&0x5000_0000u64.to_le_bytes());
+        buffer[32..40].copy_from_slice(&0x6000_0000u64.to_le_bytes());
+        buffer[56..64].copy_from_slice(&0xffu64.to_le_bytes());
+
+        assert_eq!(find_runtime_table_headers(&buffer, base), vec![table]);
+    }
+
+    #[test]
+    fn runtime_table_header_locator_rejects_unaligned_pointers() {
+        let base = 0x3000_0000usize;
+        let mut buffer = vec![0u8; RUNTIME_TABLE_SIZE];
+        buffer[0..8].copy_from_slice(&0x5000_0001u64.to_le_bytes());
+        buffer[0x10..0x18].copy_from_slice(&0x6000_0000u64.to_le_bytes());
+        buffer[0x28..0x30].copy_from_slice(&0xffu64.to_le_bytes());
+
+        assert!(find_runtime_table_headers(&buffer, base).is_empty());
     }
 
     #[test]
