@@ -166,6 +166,14 @@ enum RuntimeFlagValue {
 struct RuntimeOverrideRule {
     name: &'static str,
     value: RuntimeFlagValue,
+    /// When `true`, the heap string-scan path may emit a finding for this
+    /// rule (capped at `Suspicious`) even without nearby injector tool
+    /// markers. When `false`, only the live-registry path uses this rule.
+    /// Curation rules (see comment on `RUNTIME_OVERRIDE_RULES`):
+    /// bool rules are always `false`; int rules are `true` only when the
+    /// value is bizarre enough that no shipping Roblox client could
+    /// plausibly use it as a default.
+    string_scan_promote: bool,
 }
 
 /// Values seen in public desync/ESP configs or in the deobfuscated
@@ -174,186 +182,260 @@ struct RuntimeOverrideRule {
 /// baseline Roblox state. Do not list default-equivalent reset values here:
 /// a static snapshot cannot distinguish "Roblox defaulted this flag" from
 /// "an injector wrote the same value".
+///
+/// Two evidence paths consume this table:
+///
+/// 1. **Live registry inspection** — reads raw `[u8;4]` from the resolved
+///    FastFlag hash table. Every rule participates. False positives in this
+///    path have happened (see v0.6.6 NextGen* bool flip): if Roblox's true
+///    default differs from what we encoded, every vanilla client gets
+///    Flagged. Treat this path's coverage as load-bearing but fragile.
+///
+/// 2. **Heap string-scan** — looks for `"FlagName":value` byte shapes in
+///    heap and matches the parsed value against this table. Only rules
+///    with `string_scan_promote: true` participate. The discipline:
+///    - **Bool rules are always `false`.** Roblox can change boolean
+///      defaults between client builds and we cannot statically know which
+///      direction is the cheat-set. The screenshot from the v0.5.x era
+///      shows what happens when we get this wrong.
+///    - **Int rules with plausibly-vanilla values are `false`.** Values
+///      like `0`, `1`, `-1`, small positive integers may legitimately
+///      appear in Roblox's own remote-config response for some flag/build
+///      combination, indistinguishable from an injection.
+///    - **Int rules with bizarre values are `true`.** Heavy negatives
+///      (-30, -48, -50, -1_000, -5_000, -999_999) and near-int-max
+///      (2_147_000_000) are values no shipping Roblox client would ever
+///      use as a default — they would break the engine. These eight
+///      rules are eligible for promotion via the string-scan path.
+///
+/// The string-scan path's verdict is capped at `Suspicious` regardless of
+/// the rule's underlying severity tier, so even a misclassified rule
+/// cannot auto-Flag a vanilla client through this path.
 const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "DFIntS2PhysicsSenderRate",
         value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntS2PhysicsSenderRate",
         value: RuntimeFlagValue::Int(-30),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntS2PhysicSenderRate",
         value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntPhysicsSenderMaxBandwidthBps",
         value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntPhysicsSenderMaxBandwidthBpsScaling",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDataSenderRate",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntTouchSenderMaxBandwidthBps",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntMinClientSimulationRadius",
         value: RuntimeFlagValue::Int(2_147_000_000),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntMaxClientSimulationRadius",
         value: RuntimeFlagValue::Int(2_147_000_000),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFFlagDebugPhysicsSenderDoesNotShrinkSimRadius",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FFlagDebugUseCustomSimRadius",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "NextGenReplicatorEnabledWrite4",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "NextGenReplicatorEnabledRead",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorEnabled9",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorSerializeWrite4",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorSerializeRead3",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorWrite5",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorRead5",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntReplicatorAnimationTrackLimitPerAnimator",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntGameNetPVHeaderTranslationZeroCutoffExponent",
         value: RuntimeFlagValue::Int(10),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntGameNetPVHeaderLinearVelocityZeroCutoffExponent",
         value: RuntimeFlagValue::Int(10),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntGameNetPVHeaderRotationalVelocityZeroCutoffExponent",
         value: RuntimeFlagValue::Int(10),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntAssemblyExtentsExpansionStudHundredth",
         value: RuntimeFlagValue::Int(-50),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntSimBlockLargeLocalToolWeldManipulationsThreshold",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDebugSimPrimalStiffness",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
         value: RuntimeFlagValue::Int(-999_999),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntSolidFloorPercentForceApplication",
         value: RuntimeFlagValue::Int(-1_000),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntNonSolidFloorPercentForceApplication",
         value: RuntimeFlagValue::Int(-5_000),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntHipHeightClamp",
         value: RuntimeFlagValue::Int(-48),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "FIntParallelDynamicPartsFastClusterBatchSize",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntRaycastMaxDistance",
         value: RuntimeFlagValue::Int(3),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntMaxMissedWorldStepsRemembered",
         value: RuntimeFlagValue::Int(1_000),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntMaxActiveAnimationTracks",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFFlagDebugDrawBroadPhaseAABBs",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFFlagDebugDrawBvhNodes",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFFlagDebugDrawEnable",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FIntCameraFarZPlane",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FIntCameraFarZPlane",
         value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDebugRestrictGCDistance",
         value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntAnimationLodFacsDistanceMin",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntAnimationLodFacsDistanceMax",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FIntRenderShadowIntensity",
         value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FFlagDisablePostFx",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FFlagDebugDontRenderScreenGui",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "FFlagDebugDontRenderUI",
         value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
     },
 ];
 
@@ -1014,6 +1096,68 @@ fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) 
             _ => false,
         },
     }
+}
+
+/// String-form value match used by the heap string-scan promotion path.
+/// `parsed` comes from `extract_adjacent_value_ascii` / `_wide` and may be
+/// a quoted literal (`"foo"`), a JSON keyword (`"true" | "false" | "null"`),
+/// a signed integer (`"-30"`), or a float (`"1.5"` — rejected for Int rules).
+fn value_matches_rule(parsed: &str, rule: RuntimeFlagValue) -> bool {
+    let mut s = parsed.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        s = &s[1..s.len() - 1];
+    }
+    if s.is_empty() || s.len() > 32 {
+        return false;
+    }
+    match rule {
+        RuntimeFlagValue::Bool(expected) => {
+            if s.eq_ignore_ascii_case("true") {
+                expected
+            } else if s.eq_ignore_ascii_case("false") {
+                !expected
+            } else if let Ok(n) = s.parse::<i32>() {
+                matches!((n, expected), (1, true) | (0, false))
+            } else {
+                false
+            }
+        }
+        RuntimeFlagValue::Int(expected) => {
+            if let Ok(n) = s.parse::<i32>() {
+                n == expected
+            } else if let Ok(n) = s.parse::<i64>() {
+                n == expected as i64
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// Find a curated rule whose value matches one of the captured samples for
+/// `name`. Returns the first sample that *lacks* nearby injector context but
+/// matches a rule — that is exactly the case the marker-only verdict path
+/// silences. A known cheat name+value pair is itself strong evidence even
+/// without nearby tool strings, so this opens a separate emission branch in
+/// `findings_from_table`. Returns `None` if no curated rule matches or if
+/// every matching sample already has injector context (handled by the
+/// existing context branch).
+fn match_runtime_override_rule<'a>(
+    name: &str,
+    samples: &'a [FlagValueSample],
+) -> Option<&'a FlagValueSample> {
+    for rule in RUNTIME_OVERRIDE_RULES.iter() {
+        if rule.name != name || !rule.string_scan_promote {
+            continue;
+        }
+        if let Some(sample) = samples
+            .iter()
+            .find(|s| s.context_summary.is_none() && value_matches_rule(&s.value, rule.value))
+        {
+            return Some(sample);
+        }
+    }
+    None
 }
 
 /// Longest value literal we'll surface in a finding. Strings longer than
@@ -1904,12 +2048,24 @@ fn marker_summary(table: &FlagHitTable) -> String {
 ///
 /// Bare flag names and plain `"FlagName": value` blobs stay informational:
 /// vanilla Roblox keeps its remote flag configuration and internal registry in
-/// heap, and those byte shapes look exactly like serialized overrides. The
-/// memory scanner only raises a cheat verdict when a known suspicious flag has
-/// an adjacent parsed value AND that value is near injector / offset-tool
-/// provenance such as `fflags.json` + `address.json`, `LornoFix`, or
-/// `WriteProcessMemory`. That catches the common runtime-injection artefact
-/// without turning Roblox's own heap into false positives.
+/// heap, and those byte shapes look exactly like serialized overrides.
+///
+/// A cheat verdict fires via two evidence paths, mutually exclusive per flag:
+/// 1. **Context-backed** — a known suspicious flag has an adjacent parsed
+///    value AND that value is near injector / offset-tool provenance such as
+///    `fflags.json` + `address.json`, `LornoFix`, or `WriteProcessMemory`.
+///    Verdict reflects the rule's canonical severity (`Flagged` for CRITICAL,
+///    `Suspicious` for HIGH/MEDIUM).
+/// 2. **Value-match (capped)** — a known suspicious flag has an adjacent
+///    parsed value that matches a curated `RUNTIME_OVERRIDE_RULES` entry
+///    whose `string_scan_promote: true`, without nearby tool markers. This
+///    catches direct `WriteProcessMemory` injections that don't leave
+///    config-file strings in adjacent heap. The verdict is **capped at
+///    `Suspicious`** regardless of the rule's canonical severity, so the
+///    operator gets a flag-for-review signal without an auto-Flagged
+///    accusation. Bool rules and plausibly-vanilla int values do not
+///    participate in this path — see the rule table comment for the
+///    curation rules.
 fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
     const SAMPLE_LIMIT: usize = 25;
     let mut out = Vec::new();
@@ -1970,6 +2126,35 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                         desc,
                         INJECTOR_CONTEXT_WINDOW_BYTES,
                         sample.context_summary.as_deref().unwrap_or("unknown")
+                    )),
+                ));
+            } else if let Some(sample) = match_runtime_override_rule(name, &hit.value_samples) {
+                // Capped at Suspicious. The string-scan-without-context path
+                // is intentionally never an auto-Flagged accusation: the
+                // canonical-severity decision is reserved for the context
+                // path. Bool rules and plausibly-vanilla int values are
+                // already filtered out by `string_scan_promote: false`,
+                // but the cap is the second line of defence against any
+                // future rule misclassification.
+                let category = get_flag_category(name).unwrap_or("UNKNOWN");
+                let desc = get_flag_description(name)
+                    .map(|d| format!(" | {}", d))
+                    .unwrap_or_default();
+                let encoding = if sample.wide { "utf16" } else { "ascii" };
+                out.push(ScanFinding::new(
+                    "memory_scanner",
+                    ScanVerdict::Suspicious,
+                    format!(
+                        "Suspicious runtime FFlag value match: \"{}\" = {}",
+                        name, sample.value
+                    ),
+                    Some(format!(
+                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{} | Detection: parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious)",
+                        sample.address,
+                        encoding,
+                        hit.count,
+                        category,
+                        desc,
                     )),
                 ));
             }
@@ -3813,28 +3998,27 @@ mod tests {
     }
 
     #[test]
-    fn findings_never_emit_suspicious_or_flagged_for_known_names() {
-        // v0.5.2: memory-side flag NAME emission was retired. Even when
-        // a known CRITICAL flag with an adjacent JSON-shaped value lands
-        // in the hit table, `findings_from_table` must NOT emit a
-        // Suspicious or Flagged finding — Roblox's remote flag-config
-        // response provides the same `"Name":value` byte shape in heap
-        // on every vanilla client, so matching there produces
-        // false positives on legitimate players. The authoritative
-        // override-detection path is client_settings_scanner.
+    fn findings_stay_clean_for_known_names_with_non_exploit_values() {
+        // v0.5.2 retired bare-name emission to suppress false positives from
+        // Roblox's own remote flag-config heap. The value-match path (added
+        // later) only fires when an observed value matches a curated
+        // RUNTIME_OVERRIDE_RULES entry. Values 5, 7, and 0 are not curated
+        // rule values for these flags, so the verdict must stay Clean —
+        // proving vanilla-shaped heap blobs with known names but innocent
+        // values do not trigger either evidence path.
         let mut table = FlagHitTable::default();
         table.record_with_value(
             "DFIntS2PhysicsSenderRate",
             0x1000,
             false,
-            Some("1".to_string()),
+            Some("5".to_string()),
             None,
         );
         table.record_with_value(
             "FIntCameraFarZPlane",
             0x2000,
             false,
-            Some("1".to_string()),
+            Some("7".to_string()),
             None,
         );
         table.record_with_value(
@@ -3848,7 +4032,7 @@ mod tests {
         for f in &findings {
             assert!(
                 matches!(f.verdict, ScanVerdict::Clean),
-                "memory scanner must not emit {:?} for known names: {:?}",
+                "memory scanner must not emit {:?} for known names with non-exploit values: {:?}",
                 f.verdict,
                 f
             );
@@ -3942,8 +4126,11 @@ mod tests {
     }
 
     #[test]
-    fn vanilla_remote_config_blob_with_known_flag_values_stays_clean() {
-        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":1,"FIntCameraFarZPlane":1}"#);
+    fn vanilla_remote_config_blob_with_non_exploit_values_stays_clean() {
+        // Values 42 and 7 are not in RUNTIME_OVERRIDE_RULES; this proves
+        // that vanilla-shaped heap blobs (no markers) don't fire either
+        // the context path or the value-match path.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":42,"FIntCameraFarZPlane":7}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x9000, &mut table);
         assert!(
@@ -3982,10 +4169,14 @@ mod tests {
     }
 
     #[test]
-    fn distant_injector_marker_does_not_taint_vanilla_config_blob() {
+    fn distant_injector_marker_with_non_exploit_value_stays_clean() {
+        // Value 42 is not in RUNTIME_OVERRIDE_RULES; this isolates the
+        // proximity-gate assertion from the value-match path. With markers
+        // past the 64 KiB window AND a non-curated value, neither evidence
+        // path fires.
         let mut b = bytes("fflags.json address.json");
         b.extend(std::iter::repeat(b' ').take(INJECTOR_CONTEXT_WINDOW_BYTES + 512));
-        b.extend_from_slice(br#"{"DFIntS2PhysicsSenderRate":1}"#);
+        b.extend_from_slice(br#"{"DFIntS2PhysicsSenderRate":42}"#);
 
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0xB000, &mut table);
@@ -4062,8 +4253,10 @@ mod tests {
     }
 
     #[test]
-    fn single_tool_marker_alone_does_not_taint_flag_value() {
-        let b = bytes(r#"lornofix {"DFIntS2PhysicsSenderRate":1}"#);
+    fn single_tool_marker_alone_with_non_exploit_value_stays_clean() {
+        // Value 42 is not in RUNTIME_OVERRIDE_RULES; this isolates the
+        // single-marker rejection assertion from the value-match path.
+        let b = bytes(r#"lornofix {"DFIntS2PhysicsSenderRate":42}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0xD200, &mut table);
         assert!(table.tool_markers.contains_key("lornofix"));
@@ -4080,8 +4273,10 @@ mod tests {
 
     #[test]
     fn marker_substrings_are_not_context_markers() {
+        // Value 42 keeps the value-match path inactive so this test
+        // isolates the substring-rejection assertion.
         let b =
-            bytes(r#"myfflags.json.backup address.json.example {"DFIntS2PhysicsSenderRate":1}"#);
+            bytes(r#"myfflags.json.backup address.json.example {"DFIntS2PhysicsSenderRate":42}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0xD300, &mut table);
         assert!(
@@ -4310,6 +4505,7 @@ mod tests {
         let rule = RuntimeOverrideRule {
             name: "DFFlagDebugDrawBroadPhaseAABBs",
             value: RuntimeFlagValue::Bool(true),
+            string_scan_promote: true,
         };
         assert!(runtime_rule_matches_observed(rule, 1i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
@@ -4317,6 +4513,7 @@ mod tests {
         let rule = RuntimeOverrideRule {
             name: "DFIntS2PhysicsSenderRate",
             value: RuntimeFlagValue::Int(-30),
+            string_scan_promote: true,
         };
         assert!(runtime_rule_matches_observed(rule, (-30i32).to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 30i32.to_le_bytes()));
@@ -4327,6 +4524,7 @@ mod tests {
         let rule = RuntimeOverrideRule {
             name: "NextGenReplicatorEnabledWrite4",
             value: RuntimeFlagValue::Bool(true),
+            string_scan_promote: true,
         };
         assert!(runtime_rule_matches_observed(rule, 1i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
@@ -4449,6 +4647,213 @@ mod tests {
             table.hits.contains_key(flag),
             "chunk-straddling flag must be found after overlap replay; chunk_b str: {:?}",
             chunk_b_str
+        );
+    }
+
+    #[test]
+    fn value_match_caps_critical_flag_at_suspicious_without_injector_context() {
+        // Direct WriteProcessMemory injection of a bizarre-value rule:
+        // -30 is a documented cheat value for DFIntS2PhysicsSenderRate
+        // (impossible vanilla default — would freeze physics). The string-
+        // scan path emits Suspicious; the underlying flag is CRITICAL but
+        // the verdict caps at Suspicious so the operator gets review
+        // signal, never auto-Flagged from this evidence path alone.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":-30}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF000, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntS2PhysicsSenderRate")
+                    && f.description.contains("= -30")
+                    && f.description.contains("value match")
+            }),
+            "bizarre-value rule must promote at Suspicious, got: {:?}",
+            findings
+        );
+        assert!(
+            !findings.iter().any(|f| matches!(f.verdict, ScanVerdict::Flagged)),
+            "value-match path must never emit Flagged, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn utf16_value_match_caps_critical_flag_at_suspicious_without_injector_context() {
+        let b = to_utf16le(r#"{"DFIntS2PhysicsSenderRate":-30}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF100, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntS2PhysicsSenderRate")
+                    && f.description.contains("= -30")
+                    && f.description.contains("value match")
+            }),
+            "UTF-16 bizarre-value rule must promote at Suspicious, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_does_not_fire_for_plausible_int_value() {
+        // FIntCameraFarZPlane:1 is a documented cheat (x-ray) but value 1
+        // could plausibly appear as a vanilla default on some Roblox build
+        // — string_scan_promote is `false` for this rule. Live-registry
+        // path still catches it via raw [u8;4] read; this path stays
+        // silent to avoid the v0.6.6-class false positive.
+        let b = bytes(r#"{"FIntCameraFarZPlane":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF200, &mut table);
+        assert!(table.hits.contains_key("FIntCameraFarZPlane"));
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "plausibly-vanilla int value must not fire string-scan path, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_handles_multiple_rules_per_flag() {
+        // DFIntS2PhysicsSenderRate has rules for both Int(1) and Int(-30);
+        // verify the bizarre one fires (Int(1) is intentionally string_scan
+        // disabled).
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":-30}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF300, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntS2PhysicsSenderRate")
+                    && f.description.contains("= -30")
+                    && f.description.contains("value match")
+            }),
+            "bizarre rule for same flag must promote at Suspicious, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_does_not_fire_for_disabled_int_rule() {
+        // DFIntS2PhysicsSenderRate=1 IS a curated rule but string_scan_
+        // promote is `false` (1 could plausibly be vanilla on some build).
+        // Live-registry path still catches it via raw read; this path
+        // stays silent.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF310, &mut table);
+        assert!(table.hits.contains_key("DFIntS2PhysicsSenderRate"));
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "disabled-promotion int rule must not fire string-scan path, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_does_not_fire_for_bool_rule_canonical_value() {
+        // The screenshot's class of FP: NextGenReplicatorEnabledWrite4
+        // = true is a curated rule (Bool(true)), but string_scan_promote
+        // is `false` for all bool rules because Roblox can change boolean
+        // defaults between builds and we cannot statically tell which
+        // direction is the cheat-set. v0.5.x shipped an inverted bool
+        // rule that mass-Flagged vanilla clients via the live-registry
+        // path; the string-scan path categorically refuses to enable
+        // bool promotion, full stop.
+        let b = bytes(r#"{"NextGenReplicatorEnabledWrite4":true}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF320, &mut table);
+        assert!(table.hits.contains_key("NextGenReplicatorEnabledWrite4"));
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "bool rule canonical value must never fire string-scan path, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_stays_clean_for_non_exploit_value() {
+        // Value 5 is plausible but not a curated cheat value. v0.5.1
+        // regression guard: don't reopen the false-positive flood.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":5}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF400, &mut table);
+        assert!(table.hits.contains_key("DFIntS2PhysicsSenderRate"));
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "non-exploit value must not trigger value-match path, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_stays_clean_for_bare_flag_name() {
+        // Bare name with no adjacent JSON value. extract_adjacent_value_ascii
+        // returns None, so value_samples is empty and value-match cannot
+        // fire. v0.5.2 regression guard.
+        let mut b = vec![0u8, 0u8];
+        b.extend_from_slice(b"DFIntS2PhysicsSenderRate");
+        b.extend_from_slice(&[0u8, 0u8]);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF500, &mut table);
+        let hit = table
+            .hits
+            .get("DFIntS2PhysicsSenderRate")
+            .expect("test setup must record the bare name");
+        assert!(
+            hit.value_samples.is_empty(),
+            "bare name must produce no value samples, got {} samples",
+            hit.value_samples.len()
+        );
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "bare flag name must stay clean, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn value_match_stays_clean_for_unknown_flag() {
+        // Unknown flag name with curated-shaped value but no markers.
+        // Severity lookup returns Clean and no rule names this flag, so
+        // neither verdict path fires.
+        let b = bytes(r#"{"FFlagTotallyMadeUpNewFlag":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xF600, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "unknown flag without context must stay clean, got: {:?}",
+            findings
         );
     }
 }
