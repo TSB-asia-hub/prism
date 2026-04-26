@@ -26,3 +26,6 @@ src-tauri/gen/
 # Environment
 .env
 *.local
+
+# Local agent notes may contain machine-specific paths or secret references.
+AGENTS.md
