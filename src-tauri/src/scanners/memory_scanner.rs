@@ -517,18 +517,24 @@ impl FlagHitTable {
             entry.seen_ascii = true;
         }
         if let Some(value) = value {
-            let injector_context = context_summary.is_some();
             let already_seen = entry.value_samples.iter().any(|s| {
                 s.value == value && s.wide == wide && s.context_summary == context_summary
             });
             if !already_seen {
+                let tier = if context_summary.is_some() {
+                    SampleTier::Context
+                } else if matches_any_promoted_rule(flag, &value) {
+                    SampleTier::CuratedMatch
+                } else {
+                    SampleTier::Vanilla
+                };
                 let sample = FlagValueSample {
                     value,
                     address,
                     wide,
                     context_summary,
                 };
-                push_value_sample(&mut entry.value_samples, sample, injector_context);
+                push_value_sample(&mut entry.value_samples, sample, tier, flag);
             }
         }
     }
@@ -623,6 +629,7 @@ impl FlagHitTable {
     /// finding points at the earliest sighting, not a random one.
     fn merge(&mut self, other: FlagHitTable) {
         for (name, h) in other.hits {
+            let flag_name = name.clone();
             match self.hits.entry(name) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
                     let existing = e.get_mut();
@@ -633,14 +640,19 @@ impl FlagHitTable {
                     existing.seen_wide |= h.seen_wide;
                     existing.seen_ascii |= h.seen_ascii;
                     for sample in h.value_samples {
-                        let has_context = sample.context_summary.is_some();
                         let already_seen = existing.value_samples.iter().any(|s| {
                             s.value == sample.value
                                 && s.wide == sample.wide
                                 && s.context_summary == sample.context_summary
                         });
                         if !already_seen {
-                            push_value_sample(&mut existing.value_samples, sample, has_context);
+                            let tier = sample_tier(&sample, &flag_name);
+                            push_value_sample(
+                                &mut existing.value_samples,
+                                sample,
+                                tier,
+                                &flag_name,
+                            );
                         }
                     }
                 }
@@ -695,23 +707,64 @@ impl FlagHitTable {
     }
 }
 
+/// Verdict-relevance tier for a captured value sample. Higher tiers can
+/// displace lower tiers when the per-flag sample buffer is full, so a flood
+/// of vanilla remote-config values can never crowd out the one curated /
+/// context-bearing sample that actually drives the finding.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SampleTier {
+    /// No injector context nearby and value does not match any curated
+    /// `string_scan_promote: true` rule. Cannot raise the verdict.
+    Vanilla,
+    /// No injector context, but the parsed value exactly matches a curated
+    /// promoted rule for this flag. Drives the value-match emission path.
+    CuratedMatch,
+    /// Injector tool markers (`fflags.json`, `LornoFix`, ...) found within
+    /// the proximity window. Drives the context-backed emission path.
+    Context,
+}
+
+fn matches_any_promoted_rule(flag: &str, value: &str) -> bool {
+    RUNTIME_OVERRIDE_RULES
+        .iter()
+        .any(|r| r.string_scan_promote && r.name == flag && value_matches_rule(value, r.value))
+}
+
+fn sample_tier(s: &FlagValueSample, flag: &str) -> SampleTier {
+    if s.context_summary.is_some() {
+        SampleTier::Context
+    } else if matches_any_promoted_rule(flag, &s.value) {
+        SampleTier::CuratedMatch
+    } else {
+        SampleTier::Vanilla
+    }
+}
+
 fn push_value_sample(
     samples: &mut Vec<FlagValueSample>,
     sample: FlagValueSample,
-    has_context: bool,
+    incoming_tier: SampleTier,
+    flag: &str,
 ) {
     if samples.len() < MAX_VALUE_SAMPLES_PER_FLAG {
         samples.push(sample);
         return;
     }
 
-    // Context-backed samples are the only ones that can affect the verdict,
-    // so never let a pile of vanilla remote-config values crowd out the first
-    // useful injector-context value for the same flag.
-    if has_context {
-        if let Some(slot) = samples.iter().position(|s| s.context_summary.is_none()) {
-            samples[slot] = sample;
-        }
+    // Buffer full. Vanilla samples never displace anything — they can't raise
+    // the verdict, so dropping them is safe. Curated and context samples DO
+    // raise the verdict, so they must be guaranteed at least one slot if any
+    // exist. Find the oldest strictly-lower-tier slot and replace it; if no
+    // lower-tier slot exists, the buffer is already saturated with samples
+    // that are equal-or-higher relevance and the new one is dropped.
+    if incoming_tier == SampleTier::Vanilla {
+        return;
+    }
+    if let Some(slot) = samples
+        .iter()
+        .position(|s| sample_tier(s, flag) < incoming_tier)
+    {
+        samples[slot] = sample;
     }
 }
 
@@ -1100,29 +1153,53 @@ fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) 
 
 /// String-form value match used by the heap string-scan promotion path.
 /// `parsed` comes from `extract_adjacent_value_ascii` / `_wide` and may be
-/// a quoted literal (`"foo"`), a JSON keyword (`"true" | "false" | "null"`),
-/// a signed integer (`"-30"`), or a float (`"1.5"` — rejected for Int rules).
+/// a quoted literal (`"foo"`), a JSON keyword (`true | false | null`), or
+/// a number (`-30`, `1.5`).
+///
+/// For `Bool` rules we accept both quoted (`"true"`) and bare (`true`)
+/// forms because boolean overrides legitimately appear in both shapes
+/// across injector tools and config blobs.
+///
+/// For `Int` rules we deliberately do NOT strip surrounding quotes. The
+/// curated rule encodes the *integer* cheat value, not "any representation
+/// that parses to N". Stringified-integer JSON shapes (e.g.
+/// `"DFIntS2PhysicsSenderRate":"-30"`) come from telemetry diff blobs and
+/// other non-injector sources whose shape is incidental, and matching them
+/// broadens the false-positive surface beyond what the curation discipline
+/// was sized for.
 fn value_matches_rule(parsed: &str, rule: RuntimeFlagValue) -> bool {
-    let mut s = parsed.trim();
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s = &s[1..s.len() - 1];
-    }
-    if s.is_empty() || s.len() > 32 {
+    let s = parsed.trim();
+    if s.is_empty() || s.len() > 34 {
         return false;
     }
     match rule {
         RuntimeFlagValue::Bool(expected) => {
-            if s.eq_ignore_ascii_case("true") {
+            let unquoted = if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                &s[1..s.len() - 1]
+            } else {
+                s
+            };
+            if unquoted.is_empty() || unquoted.len() > 32 {
+                return false;
+            }
+            if unquoted.eq_ignore_ascii_case("true") {
                 expected
-            } else if s.eq_ignore_ascii_case("false") {
+            } else if unquoted.eq_ignore_ascii_case("false") {
                 !expected
-            } else if let Ok(n) = s.parse::<i32>() {
+            } else if let Ok(n) = unquoted.parse::<i32>() {
                 matches!((n, expected), (1, true) | (0, false))
             } else {
                 false
             }
         }
         RuntimeFlagValue::Int(expected) => {
+            // Reject anything that looks quoted — see the doc comment.
+            if s.starts_with('"') || s.ends_with('"') {
+                return false;
+            }
+            if s.len() > 32 {
+                return false;
+            }
             if let Ok(n) = s.parse::<i32>() {
                 n == expected
             } else if let Ok(n) = s.parse::<i64>() {
@@ -1325,6 +1402,7 @@ fn extract_adjacent_value_wide(buffer: &[u8], match_end: usize) -> Option<String
     // all of the JSON shape logic.
     let mut i = match_end;
     let mut ascii: Vec<u8> = Vec::with_capacity(MAX_VALUE_CAPTURE_BYTES + 8);
+    let mut truncated_at_non_ascii = false;
     while i + 1 < buffer.len() && ascii.len() < MAX_VALUE_CAPTURE_BYTES + 8 {
         let lo = buffer[i];
         let hi = buffer[i + 1];
@@ -1332,10 +1410,23 @@ fn extract_adjacent_value_wide(buffer: &[u8], match_end: usize) -> Option<String
         // non-zero high byte means the code unit is non-ASCII, which
         // terminates our capture window.
         if hi != 0 {
+            truncated_at_non_ascii = true;
             break;
         }
         ascii.push(lo);
         i += 2;
+    }
+    // If the loop exited because we hit a non-ASCII code unit (rather than
+    // running out of buffer or hitting our capture cap), the captured ASCII
+    // may end mid-value with no real boundary byte after it. Without a
+    // sentinel, e.g. wide-encoded `-48000` corrupted to `-48` plus a
+    // non-ASCII byte would slip past the numeric boundary check (`i ==
+    // buffer.len()` is treated as a valid trailing boundary) and falsely
+    // match the curated `Int(-48)` rule. Append a non-boundary, non-digit,
+    // non-keyword-prefix sentinel so the ASCII parser's trailing-boundary
+    // check rejects truncated numeric / keyword captures.
+    if truncated_at_non_ascii {
+        ascii.push(b'\x7f');
     }
     extract_adjacent_value_ascii(&ascii, 0)
 }
@@ -4144,6 +4235,132 @@ mod tests {
                 .iter()
                 .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
             "plain Roblox-style config blob must stay informational, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn vanilla_remote_config_blob_with_known_names_and_non_exploit_values_aggregates_clean() {
+        // Multi-flag aggregation regression guard: the original v0.5.1
+        // incident class was "vanilla heap blob containing several known
+        // suspicious flag NAMES at once produces aggregate verdict drift."
+        // Using two known-suspicious names (DFIntS2PhysicsSenderRate +
+        // FIntCameraFarZPlane) with non-rule values (42 / 7) ensures the
+        // overall verdict aggregator stays Clean even when the per-flag
+        // hits accumulate. Distinct from the per-flag value-match negative
+        // — this exercises the aggregator path explicitly.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":42,"FIntCameraFarZPlane":7}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x9100, &mut table);
+        assert!(
+            table.hits.contains_key("DFIntS2PhysicsSenderRate")
+                && table.hits.contains_key("FIntCameraFarZPlane"),
+            "test setup must exercise both known-name memory hits"
+        );
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "multi-known-name vanilla blob must aggregate to Clean, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn curated_value_sample_survives_vanilla_sample_eviction() {
+        // T5 regression: MAX_VALUE_SAMPLES_PER_FLAG used to be a strict
+        // FIFO cap with asymmetric eviction — only context-bearing samples
+        // could displace vanilla ones. A real injection that wrote
+        // `DFIntS2PhysicsSenderRate=-30` (curated cheat value, no nearby
+        // markers) was silently dropped once the buffer filled with
+        // unrelated vanilla copies of the flag from prior remote-config
+        // fetches. The fix tiers samples (Vanilla < CuratedMatch <
+        // Context) so curated matches always claim a slot.
+        let mut entry = FlagHit::default();
+        for v in 0..MAX_VALUE_SAMPLES_PER_FLAG {
+            let sample = FlagValueSample {
+                value: format!("{}", v + 100),
+                address: 0x10000 + v,
+                wide: false,
+                context_summary: None,
+            };
+            push_value_sample(
+                &mut entry.value_samples,
+                sample,
+                SampleTier::Vanilla,
+                "DFIntS2PhysicsSenderRate",
+            );
+        }
+        assert_eq!(entry.value_samples.len(), MAX_VALUE_SAMPLES_PER_FLAG);
+        let curated = FlagValueSample {
+            value: "-30".to_string(),
+            address: 0x20000,
+            wide: false,
+            context_summary: None,
+        };
+        push_value_sample(
+            &mut entry.value_samples,
+            curated,
+            SampleTier::CuratedMatch,
+            "DFIntS2PhysicsSenderRate",
+        );
+        assert!(
+            entry.value_samples.iter().any(|s| s.value == "-30"),
+            "curated-match sample must survive vanilla saturation, got: {:?}",
+            entry.value_samples.iter().map(|s| &s.value).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn truncated_wide_value_does_not_falsely_match_curated_int_rule() {
+        // C1 regression: extract_adjacent_value_wide used to silently
+        // truncate when it hit a non-zero high byte mid-value. A vanilla
+        // wide-encoded `-48000` corrupted at the third digit by a non-
+        // ASCII byte yielded `-48`, which falsely matched the curated
+        // Int(-48) rule for DFIntHipHeightClamp. The sentinel-byte fix
+        // makes the ASCII parser's trailing-boundary check reject
+        // truncated numeric captures.
+        let mut wide = to_utf16le(r#""DFIntHipHeightClamp":-48"#);
+        // Append a non-ASCII high byte so the wide loop breaks mid-value.
+        wide.push(b'0');
+        wide.push(0x03);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&wide, 0xD100, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "truncated wide value must not match curated Int rule, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn quoted_int_value_does_not_match_int_rule() {
+        // L2 regression: value_matches_rule used to strip surrounding
+        // quotes for both Bool and Int rules, so the JSON shape
+        // `"DFIntS2PhysicsSenderRate":"-30"` (stringified int — appears
+        // in telemetry diff blobs and other non-injector sources) would
+        // false-match the curated Int(-30) rule. The Int arm now refuses
+        // quoted forms.
+        let b = bytes(r#"{"DFIntS2PhysicsSenderRate":"-30"}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xD200, &mut table);
+        assert!(
+            table.hits.contains_key("DFIntS2PhysicsSenderRate"),
+            "test setup must exercise a real memory hit"
+        );
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "stringified int must not match curated Int rule, got: {:?}",
             findings
         );
     }

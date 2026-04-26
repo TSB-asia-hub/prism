@@ -70,6 +70,12 @@ Each scan generates a JSON report:
 - **Timestamped** — `validate_report` rejects reports older than 30 minutes (with a 2-minute future-clock-skew tolerance).
 - **Three-tier verdict:** `Clean` / `Suspicious` / `Flagged`.
 
+### Verdict tiers
+
+- **`Clean`** — no evidence of FFlag abuse on any scanner path.
+- **`Suspicious`** — evidence consistent with abuse, but the signal alone is not strong enough to auto-accuse. Requires operator review before any tournament action. The heap string-scan value-match path is **deliberately capped at Suspicious** — it can never auto-Flag — so that a future curated-rule misclassification, a rare vanilla heap coincidence, or any other low-confidence signal cannot directly cost a player their entry.
+- **`Flagged`** — high-confidence evidence: injector tool markers within the proximity window of a known-suspicious flag, a live FastFlag registry override carrying a curated cheat value, or equivalent multi-signal corroboration. Tournaments may treat this as ship-blocking.
+
 Reports are saved to the desktop as `FlagCheck_Report_{timestamp}.json`.
 
 ### Limits of the current trust model
