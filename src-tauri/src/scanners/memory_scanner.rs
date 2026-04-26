@@ -2167,7 +2167,6 @@ mod windows_impl {
         // two lets us fan phase B across rayon workers without serializing
         // the enum loop.
         let mut regions_to_scan: Vec<(usize, usize)> = Vec::new();
-        let mut rwx_hits = 0usize;
         let mut regions_walked = 0usize;
         let mut truncated_regions = 0usize;
         let mut intended_scan_bytes = 0u64;
@@ -2212,38 +2211,15 @@ mod windows_impl {
                 let base_protect = protect & 0xFF;
 
                 if state == MEM_COMMIT && region_size > 0 && !is_guard {
-                    // True RWX (writable + executable) is what we care about.
-                    // PAGE_EXECUTE_WRITECOPY was previously grouped here but
-                    // it is the STANDARD Windows protection assigned to a
-                    // PE's code section before first write (copy-on-write);
-                    // every vanilla process has these. Luau's native code
-                    // generator can also allocate RWX transiently. Flag
-                    // EXECUTE_READWRITE only, and only as Suspicious — a
-                    // single transient JIT page should not auto-disqualify
-                    // honest players.
-                    let is_rwx = base_protect == PAGE_EXECUTE_READWRITE;
-                    let is_write_copy = base_protect == PAGE_EXECUTE_WRITECOPY;
                     let is_readable = matches!(
                         base_protect,
-                        PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ
-                    ) || is_rwx
-                        || is_write_copy;
-
-                    if is_rwx {
-                        rwx_hits += 1;
-                        findings.push(ScanFinding::new(
-                            "memory_scanner",
-                            ScanVerdict::Suspicious,
-                            format!(
-                                "RWX memory region in Roblox process ({} KB) — possible shellcode or runtime-patched code (may also be Luau JIT)",
-                                region_size / 1024
-                            ),
-                            Some(format!(
-                                "Address: 0x{:X}, Size: {} bytes, Protection: 0x{:X}",
-                                address, region_size, protect
-                            )),
-                        ));
-                    }
+                        PAGE_READONLY
+                            | PAGE_READWRITE
+                            | PAGE_WRITECOPY
+                            | PAGE_EXECUTE_READ
+                            | PAGE_EXECUTE_READWRITE
+                            | PAGE_EXECUTE_WRITECOPY
+                    );
 
                     // Only scan heap/private/mapped regions for strings.
                     // MEM_IMAGE (file-backed .text/.rdata) contains every
@@ -2484,15 +2460,6 @@ mod windows_impl {
                 )),
             ));
         }
-        if rwx_hits == 0 && scan_completed {
-            findings.push(ScanFinding::new(
-                "memory_scanner",
-                ScanVerdict::Clean,
-                "No RWX memory regions detected in Roblox process",
-                Some(format!("PID: {}", pid)),
-            ));
-        }
-
         findings
     }
 
