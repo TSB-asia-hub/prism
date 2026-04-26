@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "fflag-check"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "aho-corasick",
  "chrono",

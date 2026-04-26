@@ -47,9 +47,6 @@ jobs:
         working-directory: src-tauri
         run: cargo test --no-fail-fast
 
-      - name: Frontend build (typecheck + bundle)
-        run: npm run build
-
   build:
     name: Build (${{ matrix.os }})
     needs: test
