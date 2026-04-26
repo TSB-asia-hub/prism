@@ -76,6 +76,7 @@ const FNV1A64_PRIME: u64 = 0x100000001b3;
 const RUNTIME_TABLE_OFFSET_FROM_SINGLETON: usize = 0x8;
 const RUNTIME_TABLE_SIZE: usize = 0x38;
 const RUNTIME_TABLE_MAX_MASK: u64 = 0x00ff_ffff;
+const MAX_RUNTIME_TABLE_HEADERS_PER_SCAN: usize = 4096;
 const RUNTIME_SINGLETON_ACCESSOR_PATTERN: &[Option<u8>] = &[
     Some(0x48),
     Some(0x83),
@@ -362,6 +363,7 @@ struct ToolMarkerHit {
 struct FlagHitTable {
     hits: HashMap<String, FlagHit>,
     tool_markers: HashMap<&'static str, ToolMarkerHit>,
+    runtime_table_headers: Vec<usize>,
 }
 
 impl FlagHitTable {
@@ -406,6 +408,15 @@ impl FlagHitTable {
             entry.first_address = address;
         }
         entry.count += 1;
+    }
+
+    fn record_runtime_table_header(&mut self, address: usize) {
+        if self.runtime_table_headers.len() >= MAX_RUNTIME_TABLE_HEADERS_PER_SCAN
+            || self.runtime_table_headers.contains(&address)
+        {
+            return;
+        }
+        self.runtime_table_headers.push(address);
     }
 
     fn total_flags(&self) -> usize {
@@ -457,6 +468,9 @@ impl FlagHitTable {
                     v.insert(h);
                 }
             }
+        }
+        for table in other.runtime_table_headers {
+            self.record_runtime_table_header(table);
         }
     }
 }
@@ -812,6 +826,7 @@ fn runtime_table_header_bytes_look_plausible(table: &[u8]) -> bool {
         && (sentinel & 0x7) == 0
         && (buckets & 0x7) == 0
         && mask != 0
+        && (mask + 1).is_power_of_two()
         && mask <= RUNTIME_TABLE_MAX_MASK
 }
 
@@ -1457,6 +1472,10 @@ fn is_wide_boundary_ok(buffer: &[u8], start: usize, len: usize) -> bool {
 /// Core per-buffer scan. Combines generic prefix discovery (ASCII) + targeted
 /// UTF-16LE search against known lists. Updates the shared hit table.
 fn scan_buffer(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
+    for header in find_runtime_table_headers(buffer, base_address) {
+        table.record_runtime_table_header(header);
+    }
+
     let markers = scan_tool_markers(buffer, base_address, table);
     // ASCII targeted scan — catches known suspicious names with and without
     // Roblox's standard FFlag prefixes. Collection is broad, verdicting is not.
@@ -2052,6 +2071,22 @@ mod windows_impl {
         });
     }
 
+    fn push_runtime_table_header_candidate(
+        candidates: &mut Vec<RuntimeRegistryCandidate>,
+        table: usize,
+        source: &'static str,
+    ) {
+        if table < RUNTIME_TABLE_OFFSET_FROM_SINGLETON {
+            return;
+        }
+        push_runtime_registry_candidate(
+            candidates,
+            table - RUNTIME_TABLE_OFFSET_FROM_SINGLETON,
+            None,
+            source,
+        );
+    }
+
     fn runtime_registry_has_probe_flag(handle: HANDLE, singleton: usize) -> bool {
         RUNTIME_REGISTRY_PROBE_NAMES
             .iter()
@@ -2123,7 +2158,10 @@ mod windows_impl {
         }
     }
 
-    fn discover_runtime_registry_candidates(handle: HANDLE) -> Vec<RuntimeRegistryCandidate> {
+    fn discover_runtime_registry_candidates(
+        handle: HANDLE,
+        heap_table_headers: &[usize],
+    ) -> Vec<RuntimeRegistryCandidate> {
         let modules = runtime_modules_windows(handle);
         let mut candidates = Vec::new();
 
@@ -2145,6 +2183,25 @@ mod windows_impl {
                     }
                 }
                 if index >= 64 {
+                    break;
+                }
+            }
+        }
+
+        if !runtime_candidates_have_probe(handle, &candidates) {
+            for &table in heap_table_headers {
+                if table < RUNTIME_TABLE_OFFSET_FROM_SINGLETON {
+                    continue;
+                }
+                let singleton = table - RUNTIME_TABLE_OFFSET_FROM_SINGLETON;
+                if runtime_table_header_looks_valid(handle, singleton)
+                    && runtime_registry_has_probe_flag(handle, singleton)
+                {
+                    push_runtime_table_header_candidate(
+                        &mut candidates,
+                        table,
+                        "heap registry table header scan",
+                    );
                     break;
                 }
             }
@@ -2256,16 +2313,21 @@ mod windows_impl {
         None
     }
 
-    fn inspect_runtime_fflag_registry(handle: HANDLE, pid: u32) -> Vec<ScanFinding> {
-        let candidates = discover_runtime_registry_candidates(handle);
+    fn inspect_runtime_fflag_registry(
+        handle: HANDLE,
+        pid: u32,
+        heap_table_headers: &[usize],
+    ) -> Vec<ScanFinding> {
+        let candidates = discover_runtime_registry_candidates(handle, heap_table_headers);
         if candidates.is_empty() {
             return vec![ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Inconclusive,
                 "Live FastFlag registry could not be resolved",
                 Some(format!(
-                    "PID: {} | Scanned Roblox image modules for strict accessors, Lorno-style RIP-relative singleton loads, and in-memory registry table headers, but no validated FastFlag table was found",
-                    pid
+                    "PID: {} | Scanned Roblox image modules for strict accessors/Lorno-style RIP-relative singleton loads and {} heap registry-table header candidates, but no validated FastFlag table was found",
+                    pid,
+                    heap_table_headers.len()
                 )),
             )];
         }
@@ -2337,9 +2399,10 @@ mod windows_impl {
                 ScanVerdict::Clean,
                 "Live FastFlag registry inspected; no curated injected values observed",
                 Some(format!(
-                    "PID: {} | Singleton candidates: {} | Registry entries read: {}",
+                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Registry entries read: {}",
                     pid,
                     candidates.len(),
+                    heap_table_headers.len(),
                     inspected
                 )),
             ));
@@ -2349,9 +2412,10 @@ mod windows_impl {
                 ScanVerdict::Inconclusive,
                 "Live FastFlag registry candidate found, but tracked entries could not be read",
                 Some(format!(
-                    "PID: {} | Singleton candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable",
+                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable",
                     pid,
-                    candidates.len()
+                    candidates.len(),
+                    heap_table_headers.len()
                 )),
             ));
         }
@@ -2416,7 +2480,6 @@ mod windows_impl {
 
         // (1) Enumerate loaded modules, flag any outside trusted paths.
         findings.extend(scan_modules_windows(handle.0, pid));
-        findings.extend(inspect_runtime_fflag_registry(handle.0, pid));
 
         // ---- Phase A: enumerate regions (sequential, metadata only). ----
         // VirtualQueryEx is a fast kernel call that just returns region info;
@@ -2628,6 +2691,11 @@ mod windows_impl {
 
         // Emit flag findings.
         findings.extend(findings_from_table(&table));
+        findings.extend(inspect_runtime_fflag_registry(
+            handle.0,
+            pid,
+            &table.runtime_table_headers,
+        ));
 
         // Honest summary. Environmental / coverage failures are
         // Inconclusive, not Suspicious — slow disks, large processes, and
@@ -3580,6 +3648,32 @@ mod tests {
         buffer[0x28..0x30].copy_from_slice(&0xffu64.to_le_bytes());
 
         assert!(find_runtime_table_headers(&buffer, base).is_empty());
+    }
+
+    #[test]
+    fn runtime_table_header_locator_rejects_non_mask_values() {
+        let base = 0x3000_0000usize;
+        let mut buffer = vec![0u8; RUNTIME_TABLE_SIZE];
+        buffer[0..8].copy_from_slice(&0x5000_0000u64.to_le_bytes());
+        buffer[0x10..0x18].copy_from_slice(&0x6000_0000u64.to_le_bytes());
+        buffer[0x28..0x30].copy_from_slice(&0xf0u64.to_le_bytes());
+
+        assert!(find_runtime_table_headers(&buffer, base).is_empty());
+    }
+
+    #[test]
+    fn scan_buffer_records_heap_runtime_table_headers() {
+        let base = 0x4000_0000usize;
+        let table = base + 24;
+        let mut buffer = vec![0u8; 24 + RUNTIME_TABLE_SIZE + 8];
+        buffer[24..32].copy_from_slice(&0x5000_0000u64.to_le_bytes());
+        buffer[40..48].copy_from_slice(&0x6000_0000u64.to_le_bytes());
+        buffer[64..72].copy_from_slice(&0xffu64.to_le_bytes());
+
+        let mut hits = FlagHitTable::default();
+        scan_buffer(&buffer, base, &mut hits);
+
+        assert_eq!(hits.runtime_table_headers, vec![table]);
     }
 
     #[test]
