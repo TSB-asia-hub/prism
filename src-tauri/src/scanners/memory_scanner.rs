@@ -4,8 +4,8 @@
 
 use crate::data::flag_allowlist::is_allowed_flag;
 use crate::data::suspicious_flags::{
-    get_flag_category, get_flag_description, get_flag_severity, CRITICAL_FLAGS, HIGH_FLAGS,
-    MEDIUM_FLAGS,
+    CRITICAL_FLAGS, HIGH_FLAGS, MEDIUM_FLAGS, get_flag_category, get_flag_description,
+    get_flag_severity,
 };
 use crate::models::{ScanFinding, ScanVerdict};
 use crate::scanners::progress::ScanProgress;
@@ -73,6 +73,26 @@ const MAX_MARKER_MATCHES_PER_CHUNK: usize = 4096;
 const MAX_PREFIX_HITS_PER_CHUNK: usize = 4096;
 const FNV1A64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV1A64_PRIME: u64 = 0x100000001b3;
+const RUNTIME_SINGLETON_ACCESSOR_PATTERN: &[Option<u8>] = &[
+    Some(0x48),
+    Some(0x83),
+    Some(0xEC),
+    Some(0x38),
+    Some(0x48),
+    Some(0x8B),
+    Some(0x0D),
+    None,
+    None,
+    None,
+    None,
+    Some(0x4C),
+    Some(0x8D),
+    Some(0x05),
+    None,
+    None,
+    None,
+    None,
+];
 
 /// Strings carried by common FFlag injectors / offset tools. These are not
 /// verdicts on their own; they only let nearby parsed flag values graduate
@@ -170,6 +190,22 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Int(-1),
     },
     RuntimeOverrideRule {
+        name: "DFIntMinClientSimulationRadius",
+        value: RuntimeFlagValue::Int(2_147_000_000),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxClientSimulationRadius",
+        value: RuntimeFlagValue::Int(2_147_000_000),
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugPhysicsSenderDoesNotShrinkSimRadius",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "FFlagDebugUseCustomSimRadius",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
         name: "NextGenReplicatorEnabledWrite4",
         value: RuntimeFlagValue::Bool(false),
     },
@@ -190,6 +226,74 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Bool(false),
     },
     RuntimeOverrideRule {
+        name: "LargeReplicatorWrite5",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "LargeReplicatorRead5",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntReplicatorAnimationTrackLimitPerAnimator",
+        value: RuntimeFlagValue::Int(-1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntGameNetPVHeaderTranslationZeroCutoffExponent",
+        value: RuntimeFlagValue::Int(10),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntGameNetPVHeaderLinearVelocityZeroCutoffExponent",
+        value: RuntimeFlagValue::Int(10),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntGameNetPVHeaderRotationalVelocityZeroCutoffExponent",
+        value: RuntimeFlagValue::Int(10),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntAssemblyExtentsExpansionStudHundredth",
+        value: RuntimeFlagValue::Int(-50),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSimBlockLargeLocalToolWeldManipulationsThreshold",
+        value: RuntimeFlagValue::Int(-1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalStiffness",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
+        value: RuntimeFlagValue::Int(-999_999),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSolidFloorPercentForceApplication",
+        value: RuntimeFlagValue::Int(-1_000),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntNonSolidFloorPercentForceApplication",
+        value: RuntimeFlagValue::Int(-5_000),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntHipHeightClamp",
+        value: RuntimeFlagValue::Int(-48),
+    },
+    RuntimeOverrideRule {
+        name: "FIntParallelDynamicPartsFastClusterBatchSize",
+        value: RuntimeFlagValue::Int(-1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntRaycastMaxDistance",
+        value: RuntimeFlagValue::Int(3),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxMissedWorldStepsRemembered",
+        value: RuntimeFlagValue::Int(1_000),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxActiveAnimationTracks",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
         name: "DFFlagDebugDrawBroadPhaseAABBs",
         value: RuntimeFlagValue::Bool(true),
     },
@@ -208,6 +312,34 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "FIntCameraFarZPlane",
         value: RuntimeFlagValue::Int(1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugRestrictGCDistance",
+        value: RuntimeFlagValue::Int(1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntAnimationLodFacsDistanceMin",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntAnimationLodFacsDistanceMax",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "FIntRenderShadowIntensity",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "FFlagDisablePostFx",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "FFlagDebugDontRenderScreenGui",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "FFlagDebugDontRenderUI",
+        value: RuntimeFlagValue::Bool(true),
     },
 ];
 
@@ -589,6 +721,77 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(FNV1A64_PRIME);
     }
     hash
+}
+
+fn resolve_rip_relative_address(
+    instruction_address: usize,
+    instruction_len: usize,
+    disp: i32,
+) -> usize {
+    let rip_after_instruction = instruction_address.saturating_add(instruction_len);
+    if disp >= 0 {
+        rip_after_instruction.saturating_add(disp as usize)
+    } else {
+        rip_after_instruction.saturating_sub((-disp) as usize)
+    }
+}
+
+fn push_unique_runtime_slot(out: &mut Vec<usize>, slot: usize) {
+    if !out.contains(&slot) {
+        out.push(slot);
+    }
+}
+
+fn is_rip_relative_qword_load(buffer: &[u8], i: usize) -> bool {
+    i + 7 <= buffer.len()
+        && matches!(buffer[i], 0x48 | 0x4C)
+        && buffer[i + 1] == 0x8B
+        && (buffer[i + 2] & 0xC7) == 0x05
+}
+
+fn find_runtime_singleton_slots(buffer: &[u8], base_address: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let pattern = RUNTIME_SINGLETON_ACCESSOR_PATTERN;
+
+    if buffer.len() >= pattern.len() {
+        for i in 0..=buffer.len() - pattern.len() {
+            if !pattern
+                .iter()
+                .enumerate()
+                .all(|(j, expected)| expected.map(|b| buffer[i + j] == b).unwrap_or(true))
+            {
+                continue;
+            }
+            let disp_start = i + 7;
+            let disp = i32::from_le_bytes([
+                buffer[disp_start],
+                buffer[disp_start + 1],
+                buffer[disp_start + 2],
+                buffer[disp_start + 3],
+            ]);
+            let slot = resolve_rip_relative_address(base_address.saturating_add(i), 11, disp);
+            push_unique_runtime_slot(&mut out, slot);
+        }
+    }
+
+    // Lorno's own pattern path does not need the full accessor shape above: it
+    // finds the RIP-relative singleton load, reads that slot, and validates the
+    // table. Roblox updates can change the surrounding prologue/trailing LEA
+    // while leaving this load intact, so use the same core primitive and let the
+    // remote table validator reject unrelated global loads.
+    if buffer.len() >= 7 {
+        for i in 0..=buffer.len() - 7 {
+            if !is_rip_relative_qword_load(buffer, i) {
+                continue;
+            }
+            let disp =
+                i32::from_le_bytes([buffer[i + 3], buffer[i + 4], buffer[i + 5], buffer[i + 6]]);
+            let slot = resolve_rip_relative_address(base_address.saturating_add(i), 7, disp);
+            push_unique_runtime_slot(&mut out, slot);
+        }
+    }
+
+    out
 }
 
 fn runtime_value_label(value: RuntimeFlagValue) -> String {
@@ -1385,14 +1588,14 @@ mod windows_impl {
     use rayon::prelude::*;
     use std::ffi::c_void;
     use std::mem;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, MAX_PATH};
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Memory::{
-        VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_IMAGE, PAGE_EXECUTE_READ,
-        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE,
-        PAGE_WRITECOPY,
+        MEM_COMMIT, MEM_IMAGE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+        VirtualQueryEx,
     };
     use windows_sys::Win32::System::ProcessStatus::{
         EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL,
@@ -1621,26 +1824,6 @@ mod windows_impl {
     const RUNTIME_MAX_CHAIN_STEPS: usize = 128;
     const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
     const RUNTIME_PATTERN_SCAN_CAP: usize = 256 * 1024 * 1024;
-    const RUNTIME_SINGLETON_PATTERN: &[Option<u8>] = &[
-        Some(0x48),
-        Some(0x83),
-        Some(0xEC),
-        Some(0x38),
-        Some(0x48),
-        Some(0x8B),
-        Some(0x0D),
-        None,
-        None,
-        None,
-        None,
-        Some(0x4C),
-        Some(0x8D),
-        Some(0x05),
-        None,
-        None,
-        None,
-        None,
-    ];
 
     fn read_process_exact(handle: HANDLE, addr: usize, out: &mut [u8]) -> bool {
         let mut bytes_read: usize = 0;
@@ -1697,47 +1880,13 @@ mod windows_impl {
         Some((info.lpBaseOfDll as usize, info.SizeOfImage as usize))
     }
 
-    fn find_runtime_singleton_slots(buffer: &[u8], base_address: usize) -> Vec<usize> {
-        let pattern = RUNTIME_SINGLETON_PATTERN;
-        let mut out = Vec::new();
-        if buffer.len() < pattern.len() {
-            return out;
-        }
-        for i in 0..=buffer.len() - pattern.len() {
-            if !pattern
-                .iter()
-                .enumerate()
-                .all(|(j, expected)| expected.map(|b| buffer[i + j] == b).unwrap_or(true))
-            {
-                continue;
-            }
-            let disp_start = i + 7;
-            let disp = i32::from_le_bytes([
-                buffer[disp_start],
-                buffer[disp_start + 1],
-                buffer[disp_start + 2],
-                buffer[disp_start + 3],
-            ]) as isize;
-            let rip_after_mov = base_address.saturating_add(i + 11);
-            let slot = if disp >= 0 {
-                rip_after_mov.saturating_add(disp as usize)
-            } else {
-                rip_after_mov.saturating_sub((-disp) as usize)
-            };
-            if !out.contains(&slot) {
-                out.push(slot);
-            }
-        }
-        out
-    }
-
     fn discover_runtime_registry_candidates(handle: HANDLE) -> Vec<RuntimeRegistryCandidate> {
         let (module_base, module_size) = match main_module_info_windows(handle) {
             Some(info) => info,
             None => return Vec::new(),
         };
         let scan_size = module_size.min(RUNTIME_PATTERN_SCAN_CAP);
-        let overlap = RUNTIME_SINGLETON_PATTERN.len().saturating_sub(1);
+        let overlap = RUNTIME_SINGLETON_ACCESSOR_PATTERN.len().saturating_sub(1);
         let mut scratch = vec![0u8; RUNTIME_PATTERN_SCAN_CHUNK + overlap];
         let mut candidates = Vec::new();
         let mut offset = 0usize;
@@ -1779,7 +1928,13 @@ mod windows_impl {
         let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap());
         let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap());
         let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
-        sentinel != 0 && buckets != 0 && mask != 0 && mask <= 0x00ff_ffff
+        sentinel != 0
+            && buckets != 0
+            && (sentinel & 0x7) == 0
+            && (buckets & 0x7) == 0
+            && mask != 0
+            && mask <= 0x00ff_ffff
+            && (mask & mask.saturating_add(1)) == 0
     }
 
     fn remote_node_string_matches(
@@ -1866,7 +2021,15 @@ mod windows_impl {
     fn inspect_runtime_fflag_registry(handle: HANDLE, pid: u32) -> Vec<ScanFinding> {
         let candidates = discover_runtime_registry_candidates(handle);
         if candidates.is_empty() {
-            return Vec::new();
+            return vec![ScanFinding::new(
+                "memory_scanner",
+                ScanVerdict::Inconclusive,
+                "Live FastFlag registry could not be resolved",
+                Some(format!(
+                    "PID: {} | Scanned Roblox main module for strict accessor and Lorno-style RIP-relative singleton loads, but no validated registry table was found",
+                    pid
+                )),
+            )];
         }
 
         let mut findings = Vec::new();
@@ -2734,9 +2897,10 @@ mod tests {
     fn prefix_scan_finds_known_flag() {
         let b = bytes("{\"DFIntS2PhysicsSenderRate\":1}");
         let hits = scan_prefix_hits(&b);
-        assert!(hits
-            .iter()
-            .any(|(_, n, known)| n == "DFIntS2PhysicsSenderRate" && *known));
+        assert!(
+            hits.iter()
+                .any(|(_, n, known)| n == "DFIntS2PhysicsSenderRate" && *known)
+        );
     }
 
     #[test]
@@ -3142,6 +3306,33 @@ mod tests {
             0x6bfd_cc53_cb96_e6b8
         );
         assert_eq!(fnv1a64(b"FIntCameraFarZPlane"), 0x94f7_f3f0_4cb3_729a);
+    }
+
+    #[test]
+    fn runtime_singleton_locator_accepts_lorno_style_rip_load() {
+        let base = 0x1000_0000usize;
+        let instr_offset = 3usize;
+        let slot = 0x1000_1000usize;
+        let rip_after_mov = base + instr_offset + 7;
+        let disp = (slot as isize - rip_after_mov as isize) as i32;
+
+        let mut buffer = vec![0x90, 0x90, 0x90, 0x48, 0x8B, 0x0D];
+        buffer.extend_from_slice(&disp.to_le_bytes());
+
+        assert_eq!(find_runtime_singleton_slots(&buffer, base), vec![slot]);
+    }
+
+    #[test]
+    fn runtime_singleton_locator_dedupes_strict_and_generic_matches() {
+        let base = 0x2000_0000usize;
+        let slot = 0x2000_4000usize;
+        let rip_after_mov = base + 11;
+        let disp = (slot as isize - rip_after_mov as isize) as i32;
+        let mut buffer = vec![0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0x0D];
+        buffer.extend_from_slice(&disp.to_le_bytes());
+        buffer.extend_from_slice(&[0x4C, 0x8D, 0x05, 0, 0, 0, 0]);
+
+        assert_eq!(find_runtime_singleton_slots(&buffer, base), vec![slot]);
     }
 
     #[test]

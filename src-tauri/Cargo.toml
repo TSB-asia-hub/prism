@@ -1,6 +1,6 @@
 [package]
 name = "fflag-check"
-version = "0.6.0"
+version = "0.6.1"
 description = "TSBCC FFlag Scanner — tournament integrity tool for Roblox FFlag detection"
 authors = ["TSBCC"]
 edition = "2021"
