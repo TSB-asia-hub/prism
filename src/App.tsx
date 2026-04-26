@@ -709,6 +709,17 @@ const FindingRow = memo(function FindingRow({
         : f.verdict === "Inconclusive"
           ? "?"
           : "•";
+  // Tooltip on the verdict cell: explain that Suspicious is operator-review,
+  // not auto-accusation — the value-match heap path is capped here so a
+  // curated-rule misclassification can never directly cost a player.
+  const verdictTitle =
+    f.verdict === "Suspicious"
+      ? "Suspicious — evidence requires operator review. Will not auto-accuse a player; tournament action requires staff confirmation."
+      : f.verdict === "Flagged"
+        ? "Flagged — high-confidence evidence (injector markers + curated cheat value, or equivalent multi-signal corroboration)."
+        : f.verdict === "Inconclusive"
+          ? "Inconclusive — scanner could not run on this platform or coverage was insufficient."
+          : "Clean — no evidence of abuse on this path.";
   const handleClick = useCallback(() => onToggle(rowKey), [onToggle, rowKey]);
   const handleKey = useCallback(
     (e: ReactKeyboardEvent) => {
@@ -732,7 +743,7 @@ const FindingRow = memo(function FindingRow({
       <span className="row__bar" aria-hidden="true" />
       <span className="row__module">{f.module}</span>
       <span className="row__desc">{f.description}</span>
-      <span className="row__verdict">
+      <span className="row__verdict" title={verdictTitle}>
         <span aria-hidden="true">{glyph}</span> {f.verdict.toLowerCase()}
       </span>
       <span className="row__time">{shortTime(f.timestamp)}</span>
