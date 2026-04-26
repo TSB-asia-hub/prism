@@ -71,6 +71,8 @@ const INJECTOR_CONTEXT_WINDOW_BYTES: usize = 64 * 1024;
 const MAX_VALUE_SAMPLES_PER_FLAG: usize = 8;
 const MAX_MARKER_MATCHES_PER_CHUNK: usize = 4096;
 const MAX_PREFIX_HITS_PER_CHUNK: usize = 4096;
+const FNV1A64_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV1A64_PRIME: u64 = 0x100000001b3;
 
 /// Strings carried by common FFlag injectors / offset tools. These are not
 /// verdicts on their own; they only let nearby parsed flag values graduate
@@ -121,6 +123,93 @@ struct FlagValueSample {
     wide: bool,
     context_summary: Option<String>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeFlagValue {
+    Bool(bool),
+    Int(i32),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeOverrideRule {
+    name: &'static str,
+    value: RuntimeFlagValue,
+}
+
+/// Values seen in public desync/ESP configs or in the deobfuscated
+/// LornoFix payload. Runtime registry inspection only elevates exact
+/// name+value pairs from this list; a bare registered flag name remains
+/// baseline Roblox state.
+const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
+    RuntimeOverrideRule {
+        name: "DFIntS2PhysicsSenderRate",
+        value: RuntimeFlagValue::Int(1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntS2PhysicsSenderRate",
+        value: RuntimeFlagValue::Int(-30),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntS2PhysicSenderRate",
+        value: RuntimeFlagValue::Int(1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntPhysicsSenderMaxBandwidthBps",
+        value: RuntimeFlagValue::Int(1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntPhysicsSenderMaxBandwidthBpsScaling",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDataSenderRate",
+        value: RuntimeFlagValue::Int(-1),
+    },
+    RuntimeOverrideRule {
+        name: "DFIntTouchSenderMaxBandwidthBps",
+        value: RuntimeFlagValue::Int(-1),
+    },
+    RuntimeOverrideRule {
+        name: "NextGenReplicatorEnabledWrite4",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "NextGenReplicatorEnabledRead",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "LargeReplicatorEnabled9",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "LargeReplicatorSerializeWrite4",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "LargeReplicatorSerializeRead3",
+        value: RuntimeFlagValue::Bool(false),
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugDrawBroadPhaseAABBs",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugDrawBvhNodes",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugDrawEnable",
+        value: RuntimeFlagValue::Bool(true),
+    },
+    RuntimeOverrideRule {
+        name: "FIntCameraFarZPlane",
+        value: RuntimeFlagValue::Int(0),
+    },
+    RuntimeOverrideRule {
+        name: "FIntCameraFarZPlane",
+        value: RuntimeFlagValue::Int(1),
+    },
+];
 
 /// Aggregated state for high-risk strings that offset-based FFlag injectors
 /// commonly carry alongside their serialized config/address cache. These are
@@ -491,6 +580,34 @@ fn is_ident_byte(b: u8) -> bool {
 
 fn is_value_boundary_byte(b: u8) -> bool {
     b == 0 || b.is_ascii_whitespace() || matches!(b, b',' | b'}' | b']' | b';')
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = FNV1A64_OFFSET;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV1A64_PRIME);
+    }
+    hash
+}
+
+fn runtime_value_label(value: RuntimeFlagValue) -> String {
+    match value {
+        RuntimeFlagValue::Bool(v) => v.to_string(),
+        RuntimeFlagValue::Int(v) => v.to_string(),
+    }
+}
+
+fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
+    let observed_int = i32::from_le_bytes(raw_value);
+    match rule.value {
+        RuntimeFlagValue::Int(expected) => observed_int == expected,
+        RuntimeFlagValue::Bool(expected) => match observed_int {
+            0 => !expected,
+            1 => expected,
+            _ => false,
+        },
+    }
 }
 
 /// Longest value literal we'll surface in a finding. Strings longer than
@@ -1278,7 +1395,8 @@ mod windows_impl {
         PAGE_WRITECOPY,
     };
     use windows_sys::Win32::System::ProcessStatus::{
-        EnumProcessModulesEx, GetModuleFileNameExW, LIST_MODULES_ALL,
+        EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL,
+        MODULEINFO,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
@@ -1491,6 +1609,336 @@ mod windows_impl {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct RuntimeRegistryCandidate {
+        singleton: usize,
+        slot: usize,
+    }
+
+    const RUNTIME_TABLE_SIZE: usize = 0x38;
+    const RUNTIME_NODE_SIZE: usize = 0x38;
+    const RUNTIME_VALUE_PTR_OFFSET: usize = 0xC0;
+    const RUNTIME_MAX_CHAIN_STEPS: usize = 128;
+    const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
+    const RUNTIME_PATTERN_SCAN_CAP: usize = 256 * 1024 * 1024;
+    const RUNTIME_SINGLETON_PATTERN: &[Option<u8>] = &[
+        Some(0x48),
+        Some(0x83),
+        Some(0xEC),
+        Some(0x38),
+        Some(0x48),
+        Some(0x8B),
+        Some(0x0D),
+        None,
+        None,
+        None,
+        None,
+        Some(0x4C),
+        Some(0x8D),
+        Some(0x05),
+        None,
+        None,
+        None,
+        None,
+    ];
+
+    fn read_process_exact(handle: HANDLE, addr: usize, out: &mut [u8]) -> bool {
+        let mut bytes_read: usize = 0;
+        let ok = unsafe {
+            ReadProcessMemory(
+                handle,
+                addr as *const c_void,
+                out.as_mut_ptr() as *mut c_void,
+                out.len(),
+                &mut bytes_read,
+            )
+        };
+        ok != 0 && bytes_read == out.len()
+    }
+
+    fn read_process_u64(handle: HANDLE, addr: usize) -> Option<u64> {
+        let mut buf = [0u8; 8];
+        read_process_exact(handle, addr, &mut buf).then(|| u64::from_le_bytes(buf))
+    }
+
+    fn read_process_i32_bytes(handle: HANDLE, addr: usize) -> Option<[u8; 4]> {
+        let mut buf = [0u8; 4];
+        read_process_exact(handle, addr, &mut buf).then_some(buf)
+    }
+
+    fn main_module_info_windows(handle: HANDLE) -> Option<(usize, usize)> {
+        let mut modules: [HMODULE; 1] = [std::ptr::null_mut(); 1];
+        let mut needed = 0u32;
+        let ok = unsafe {
+            EnumProcessModulesEx(
+                handle,
+                modules.as_mut_ptr(),
+                mem::size_of_val(&modules) as u32,
+                &mut needed,
+                LIST_MODULES_ALL,
+            )
+        };
+        if ok == 0 || modules[0].is_null() {
+            return None;
+        }
+
+        let mut info: MODULEINFO = unsafe { mem::zeroed() };
+        let ok = unsafe {
+            GetModuleInformation(
+                handle,
+                modules[0],
+                &mut info,
+                mem::size_of::<MODULEINFO>() as u32,
+            )
+        };
+        if ok == 0 || info.lpBaseOfDll.is_null() || info.SizeOfImage == 0 {
+            return None;
+        }
+        Some((info.lpBaseOfDll as usize, info.SizeOfImage as usize))
+    }
+
+    fn find_runtime_singleton_slots(buffer: &[u8], base_address: usize) -> Vec<usize> {
+        let pattern = RUNTIME_SINGLETON_PATTERN;
+        let mut out = Vec::new();
+        if buffer.len() < pattern.len() {
+            return out;
+        }
+        for i in 0..=buffer.len() - pattern.len() {
+            if !pattern
+                .iter()
+                .enumerate()
+                .all(|(j, expected)| expected.map(|b| buffer[i + j] == b).unwrap_or(true))
+            {
+                continue;
+            }
+            let disp_start = i + 7;
+            let disp = i32::from_le_bytes([
+                buffer[disp_start],
+                buffer[disp_start + 1],
+                buffer[disp_start + 2],
+                buffer[disp_start + 3],
+            ]) as isize;
+            let rip_after_mov = base_address.saturating_add(i + 11);
+            let slot = if disp >= 0 {
+                rip_after_mov.saturating_add(disp as usize)
+            } else {
+                rip_after_mov.saturating_sub((-disp) as usize)
+            };
+            if !out.contains(&slot) {
+                out.push(slot);
+            }
+        }
+        out
+    }
+
+    fn discover_runtime_registry_candidates(handle: HANDLE) -> Vec<RuntimeRegistryCandidate> {
+        let (module_base, module_size) = match main_module_info_windows(handle) {
+            Some(info) => info,
+            None => return Vec::new(),
+        };
+        let scan_size = module_size.min(RUNTIME_PATTERN_SCAN_CAP);
+        let overlap = RUNTIME_SINGLETON_PATTERN.len().saturating_sub(1);
+        let mut scratch = vec![0u8; RUNTIME_PATTERN_SCAN_CHUNK + overlap];
+        let mut candidates = Vec::new();
+        let mut offset = 0usize;
+
+        while offset < scan_size {
+            let size = (scan_size - offset).min(RUNTIME_PATTERN_SCAN_CHUNK + overlap);
+            let addr = module_base.saturating_add(offset);
+            if read_process_exact(handle, addr, &mut scratch[..size]) {
+                for slot in find_runtime_singleton_slots(&scratch[..size], addr) {
+                    if let Some(singleton) = read_process_u64(handle, slot)
+                        .and_then(|p| usize::try_from(p).ok())
+                        .filter(|&p| p != 0 && runtime_table_header_looks_valid(handle, p))
+                    {
+                        if !candidates
+                            .iter()
+                            .any(|c: &RuntimeRegistryCandidate| c.singleton == singleton)
+                        {
+                            candidates.push(RuntimeRegistryCandidate { singleton, slot });
+                        }
+                    }
+                }
+            }
+            let advance = RUNTIME_PATTERN_SCAN_CHUNK.min(scan_size - offset);
+            if advance == 0 {
+                break;
+            }
+            offset = offset.saturating_add(advance);
+        }
+
+        candidates
+    }
+
+    fn runtime_table_header_looks_valid(handle: HANDLE, singleton: usize) -> bool {
+        let mut table = [0u8; RUNTIME_TABLE_SIZE];
+        if !read_process_exact(handle, singleton.saturating_add(0x8), &mut table) {
+            return false;
+        }
+
+        let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap());
+        let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap());
+        let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
+        sentinel != 0 && buckets != 0 && mask != 0 && mask <= 0x00ff_ffff
+    }
+
+    fn remote_node_string_matches(
+        handle: HANDLE,
+        node_addr: usize,
+        node: &[u8; RUNTIME_NODE_SIZE],
+        expected: &str,
+    ) -> bool {
+        let len = u64::from_le_bytes(node[0x20..0x28].try_into().unwrap()) as usize;
+        if len != expected.len() || len > MAX_IDENT_BODY_LEN + 16 {
+            return false;
+        }
+
+        let cap = u64::from_le_bytes(node[0x28..0x30].try_into().unwrap());
+        let mut actual = vec![0u8; len];
+        if cap <= 0x0f {
+            if len > 0x0f {
+                return false;
+            }
+            actual.copy_from_slice(&node[0x10..0x10 + len]);
+        } else {
+            let ptr = u64::from_le_bytes(node[0x10..0x18].try_into().unwrap()) as usize;
+            if ptr == 0 || !read_process_exact(handle, ptr, &mut actual) {
+                return false;
+            }
+        }
+
+        actual == expected.as_bytes()
+            || (len <= RUNTIME_NODE_SIZE - 0x10
+                && node_addr != 0
+                && &node[0x10..0x10 + len] == expected.as_bytes())
+    }
+
+    fn lookup_runtime_flag_entry(
+        handle: HANDLE,
+        singleton: usize,
+        flag_name: &str,
+    ) -> Option<usize> {
+        let mut table = [0u8; RUNTIME_TABLE_SIZE];
+        read_process_exact(handle, singleton.saturating_add(0x8), &mut table).then_some(())?;
+
+        let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap()) as usize;
+        let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap()) as usize;
+        let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
+        if buckets == 0 || mask == 0 || mask > 0x00ff_ffff {
+            return None;
+        }
+
+        let bucket_index = fnv1a64(flag_name.as_bytes()) & mask;
+        let bucket_addr = buckets.checked_add((bucket_index as usize).checked_mul(16)?)?;
+        let mut bucket = [0u8; 16];
+        read_process_exact(handle, bucket_addr, &mut bucket).then_some(())?;
+
+        let chain_end = u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
+        let mut current = u64::from_le_bytes(bucket[0x08..0x10].try_into().unwrap()) as usize;
+        if current == 0 || current == sentinel {
+            return None;
+        }
+
+        for _ in 0..RUNTIME_MAX_CHAIN_STEPS {
+            let mut node = [0u8; RUNTIME_NODE_SIZE];
+            if !read_process_exact(handle, current, &mut node) {
+                return None;
+            }
+
+            if remote_node_string_matches(handle, current, &node, flag_name) {
+                let entry = u64::from_le_bytes(node[0x30..0x38].try_into().unwrap()) as usize;
+                return (entry != 0).then_some(entry);
+            }
+
+            if current == chain_end {
+                break;
+            }
+            let next = u64::from_le_bytes(node[0x08..0x10].try_into().unwrap()) as usize;
+            if next == 0 || next == current {
+                break;
+            }
+            current = next;
+        }
+
+        None
+    }
+
+    fn inspect_runtime_fflag_registry(handle: HANDLE, pid: u32) -> Vec<ScanFinding> {
+        let candidates = discover_runtime_registry_candidates(handle);
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let mut findings = Vec::new();
+        let mut inspected = 0usize;
+        for candidate in &candidates {
+            for &rule in RUNTIME_OVERRIDE_RULES {
+                let entry = match lookup_runtime_flag_entry(handle, candidate.singleton, rule.name)
+                {
+                    Some(entry) => entry,
+                    None => continue,
+                };
+                inspected += 1;
+                let value_ptr = match read_process_u64(
+                    handle,
+                    entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET),
+                ) {
+                    Some(ptr) if ptr != 0 => ptr as usize,
+                    _ => continue,
+                };
+                let raw_value = match read_process_i32_bytes(handle, value_ptr) {
+                    Some(raw) => raw,
+                    None => continue,
+                };
+                if !runtime_rule_matches_observed(rule, raw_value) {
+                    continue;
+                }
+
+                let verdict = get_flag_severity(rule.name);
+                let label = match verdict {
+                    ScanVerdict::Flagged => "Critical live FastFlag registry override",
+                    ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
+                    ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                        "Live FastFlag registry override"
+                    }
+                };
+                findings.push(ScanFinding::new(
+                    "memory_scanner",
+                    verdict,
+                    format!(
+                        "{}: \"{}\" = {}",
+                        label,
+                        rule.name,
+                        runtime_value_label(rule.value)
+                    ),
+                    Some(format!(
+                        "PID: {} | Singleton: 0x{:X} via RIP slot 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                        pid, candidate.singleton, candidate.slot, entry, value_ptr
+                    )),
+                ));
+            }
+            if !findings.is_empty() {
+                break;
+            }
+        }
+
+        if findings.is_empty() && inspected > 0 {
+            findings.push(ScanFinding::new(
+                "memory_scanner",
+                ScanVerdict::Clean,
+                "Live FastFlag registry inspected; no curated injected values observed",
+                Some(format!(
+                    "PID: {} | Singleton candidates: {} | Registry entries read: {}",
+                    pid,
+                    candidates.len(),
+                    inspected
+                )),
+            ));
+        }
+
+        findings
+    }
+
     pub(super) async fn scan_windows(reporter: ScanProgress) -> Vec<ScanFinding> {
         let proc = match find_roblox_process() {
             Some(p) => p,
@@ -1548,6 +1996,7 @@ mod windows_impl {
 
         // (1) Enumerate loaded modules, flag any outside trusted paths.
         findings.extend(scan_modules_windows(handle.0, pid));
+        findings.extend(inspect_runtime_fflag_registry(handle.0, pid));
 
         // ---- Phase A: enumerate regions (sequential, metadata only). ----
         // VirtualQueryEx is a fast kernel call that just returns region info;
@@ -2683,6 +3132,44 @@ mod tests {
             "substring marker matches must not taint a value, got: {:?}",
             findings
         );
+    }
+
+    #[test]
+    fn runtime_hash_matches_lorno_lookup_algorithm() {
+        assert_eq!(fnv1a64(b"DFIntS2PhysicsSenderRate"), 0x6a17_20d7_9b16_e211);
+        assert_eq!(
+            fnv1a64(b"DFFlagDebugDrawBroadPhaseAABBs"),
+            0x6bfd_cc53_cb96_e6b8
+        );
+        assert_eq!(fnv1a64(b"FIntCameraFarZPlane"), 0x94f7_f3f0_4cb3_729a);
+    }
+
+    #[test]
+    fn runtime_override_values_match_exact_cheat_values() {
+        let rule = RuntimeOverrideRule {
+            name: "DFFlagDebugDrawBroadPhaseAABBs",
+            value: RuntimeFlagValue::Bool(true),
+        };
+        assert!(runtime_rule_matches_observed(rule, 1i32.to_le_bytes()));
+        assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
+
+        let rule = RuntimeOverrideRule {
+            name: "DFIntS2PhysicsSenderRate",
+            value: RuntimeFlagValue::Int(-30),
+        };
+        assert!(runtime_rule_matches_observed(rule, (-30i32).to_le_bytes()));
+        assert!(!runtime_rule_matches_observed(rule, 30i32.to_le_bytes()));
+    }
+
+    #[test]
+    fn runtime_bool_rejects_superficially_similar_non_bool_ints() {
+        let rule = RuntimeOverrideRule {
+            name: "NextGenReplicatorEnabledWrite4",
+            value: RuntimeFlagValue::Bool(false),
+        };
+        assert!(runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
+        assert!(!runtime_rule_matches_observed(rule, 2i32.to_le_bytes()));
+        assert!(!runtime_rule_matches_observed(rule, (-1i32).to_le_bytes()));
     }
 
     #[test]
