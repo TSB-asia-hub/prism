@@ -2791,9 +2791,6 @@ mod windows_impl {
                     }),
                 ));
             }
-            if !findings.is_empty() {
-                break;
-            }
         }
 
         if findings.is_empty() && inspected > 0 {
@@ -3164,36 +3161,33 @@ mod windows_impl {
             &table.runtime_table_headers,
             table.runtime_table_header_matches,
         );
-        let registry_elevated = registry_findings.iter().any(|finding| {
-            matches!(
+        let runtime_node_entries = resolved_runtime_node_entries(&table);
+        let node_findings = inspect_runtime_node_entries(
+            handle.0,
+            pid,
+            &runtime_node_entries,
+            table
+                .runtime_node_entry_matches
+                .saturating_add(table.runtime_long_string_node_matches),
+        );
+        let mut runtime_elevated = false;
+        let mut runtime_non_elevated = Vec::new();
+        let mut seen_runtime_descriptions = HashSet::new();
+        for finding in registry_findings.into_iter().chain(node_findings) {
+            if matches!(
                 finding.verdict,
                 ScanVerdict::Flagged | ScanVerdict::Suspicious
-            )
-        });
-        let node_findings = if registry_elevated {
-            Vec::new()
-        } else {
-            let runtime_node_entries = resolved_runtime_node_entries(&table);
-            inspect_runtime_node_entries(
-                handle.0,
-                pid,
-                &runtime_node_entries,
-                table
-                    .runtime_node_entry_matches
-                    .saturating_add(table.runtime_long_string_node_matches),
-            )
-        };
-        let node_elevated = node_findings.iter().any(|finding| {
-            matches!(
-                finding.verdict,
-                ScanVerdict::Flagged | ScanVerdict::Suspicious
-            )
-        });
-        if registry_elevated || !node_elevated {
-            findings.extend(registry_findings);
+            ) {
+                runtime_elevated = true;
+                if seen_runtime_descriptions.insert(finding.description.clone()) {
+                    findings.push(finding);
+                }
+            } else {
+                runtime_non_elevated.push(finding);
+            }
         }
-        if node_elevated {
-            findings.extend(node_findings);
+        if !runtime_elevated {
+            findings.extend(runtime_non_elevated);
         }
 
         // Honest summary. Environmental / coverage failures are
