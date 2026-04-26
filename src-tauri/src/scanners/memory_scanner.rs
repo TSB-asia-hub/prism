@@ -171,7 +171,9 @@ struct RuntimeOverrideRule {
 /// Values seen in public desync/ESP configs or in the deobfuscated
 /// LornoFix payload. Runtime registry inspection only elevates exact
 /// name+value pairs from this list; a bare registered flag name remains
-/// baseline Roblox state.
+/// baseline Roblox state. Do not list default-equivalent reset values here:
+/// a static snapshot cannot distinguish "Roblox defaulted this flag" from
+/// "an injector wrote the same value".
 const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "DFIntS2PhysicsSenderRate",
@@ -219,31 +221,31 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
     RuntimeOverrideRule {
         name: "NextGenReplicatorEnabledWrite4",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "NextGenReplicatorEnabledRead",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorEnabled9",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorSerializeWrite4",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorSerializeRead3",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorWrite5",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "LargeReplicatorRead5",
-        value: RuntimeFlagValue::Bool(false),
+        value: RuntimeFlagValue::Bool(true),
     },
     RuntimeOverrideRule {
         name: "DFIntReplicatorAnimationTrackLimitPerAnimator",
@@ -3908,7 +3910,7 @@ mod tests {
 
     #[test]
     fn ascii_known_scan_catches_non_fflag_prefix_names() {
-        let b = bytes(r#"fflags.json address.json {"NextGenReplicatorEnabledWrite4":false}"#);
+        let b = bytes(r#"fflags.json address.json {"NextGenReplicatorEnabledWrite4":true}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x8000, &mut table);
 
@@ -3919,6 +3921,22 @@ mod tests {
                     && f.description.contains("NextGenReplicatorEnabledWrite4")
             }),
             "expected non-prefix critical flag to be detected, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn nextgen_default_false_without_injector_context_stays_clean() {
+        let b = bytes(r#"{"NextGenReplicatorEnabledWrite4":false}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x8800, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "default-equivalent false reset value must not raise verdict, got: {:?}",
             findings
         );
     }
@@ -4305,12 +4323,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_bool_rejects_superficially_similar_non_bool_ints() {
+    fn runtime_replicator_bool_flags_active_true_not_default_false() {
         let rule = RuntimeOverrideRule {
             name: "NextGenReplicatorEnabledWrite4",
-            value: RuntimeFlagValue::Bool(false),
+            value: RuntimeFlagValue::Bool(true),
         };
-        assert!(runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
+        assert!(runtime_rule_matches_observed(rule, 1i32.to_le_bytes()));
+        assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 2i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, (-1i32).to_le_bytes()));
     }

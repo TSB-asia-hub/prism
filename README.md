@@ -36,7 +36,7 @@ Parses Roblox's `ClientAppSettings.json` and bootstrapper configs:
 Every detected FFlag is classified against:
 - **Allowlist** — the 18 officially-permitted flags from Roblox's Sept 29, 2025 announcement (https://devforum.roblox.com/t/3966569). A `ClientAppSettings.json` containing only allowlisted flags produces a Clean finding, not Suspicious.
 - **Critical / High / Medium / Low tiers** — non-allowlisted flags categorized by exploit potential (desync, visual advantage, etc.).
-- **Unknown** — non-allowlisted flags not in the database, reported for staff review.
+- **Unknown** — flag-shaped overrides not in the database, emitted as Clean informational entries so staff can review them without turning an outdated local database into a warning by itself.
 
 ### Prefetch Scanner (Windows)
 Reads `C:\Windows\Prefetch\*.pf` to detect execution history of known tools — catches players who uninstall tools before running the scanner.

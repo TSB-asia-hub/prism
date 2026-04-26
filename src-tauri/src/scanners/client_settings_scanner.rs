@@ -4,11 +4,10 @@ use crate::data::flag_allowlist::is_allowed_flag;
 use crate::data::suspicious_flags::{get_flag_category, get_flag_description, get_flag_severity};
 use crate::models::{ScanFinding, ScanVerdict};
 
-/// The set of identifier prefixes every real Roblox FFlag starts with. A
-/// JSON key that doesn't match one of these is not a flag override at all
-/// — it's unrelated configuration data, and treating it as a "suspicious
-/// flag" would be a false positive. Kept in sync with the memory scanner's
-/// FLAG_PREFIXES.
+/// The common identifier prefixes used by Roblox FFlags. A few known engine
+/// toggles, such as NextGen/Large replicator flags, do not carry these
+/// prefixes, so exact names from the local suspicious-flag database are also
+/// treated as flag overrides.
 const FFLAG_KEY_PREFIXES: &[&str] = &[
     "FFlag", "DFFlag", "DFInt", "FInt", "DFString", "FString", "DFLog", "FLog", "SFFlag", "SFInt",
     "SFString",
@@ -16,6 +15,14 @@ const FFLAG_KEY_PREFIXES: &[&str] = &[
 
 fn looks_like_fflag_key(key: &str) -> bool {
     FFLAG_KEY_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
+fn is_known_suspicious_flag_key(key: &str) -> bool {
+    get_flag_category(key).is_some() || !matches!(get_flag_severity(key), ScanVerdict::Clean)
+}
+
+fn should_check_flag_key(key: &str) -> bool {
+    looks_like_fflag_key(key) || is_known_suspicious_flag_key(key)
 }
 
 /// Scan Roblox ClientAppSettings.json and bootstrapper configs for suspicious FFlags.
@@ -161,12 +168,10 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
     }
 
     for (key, value) in map {
-        // Only identifiers with a real FFlag prefix are treated as flag
-        // overrides. Non-FFlag keys in a ClientAppSettings.json — e.g.
-        // launcher metadata accidentally written into the same file — are
-        // not flags, so we should not emit "Unknown non-allowlisted FFlag"
-        // findings for them.
-        if !looks_like_fflag_key(key) {
+        // Only flag-shaped identifiers or exact known suspicious engine
+        // toggles are treated as flag overrides. Non-FFlag keys in a
+        // ClientAppSettings.json are unrelated launcher metadata.
+        if !should_check_flag_key(key) {
             continue;
         }
         if is_allowed_flag(key) {
@@ -322,14 +327,7 @@ fn scan_bootstrapper_configs(findings: &mut Vec<ScanFinding>) {
 
             // Bloxstrap/Voidstrap format: flat JSON { "FlagName": value, ... }
             if let Some(obj) = parsed.as_object() {
-                let has_fflags = obj.keys().any(|k| {
-                    k.starts_with("FFlag")
-                        || k.starts_with("DFInt")
-                        || k.starts_with("DFFlag")
-                        || k.starts_with("FInt")
-                        || k.starts_with("FLog")
-                        || k.starts_with("SFFlag")
-                });
+                let has_fflags = obj.keys().any(|k| should_check_flag_key(k));
                 if has_fflags {
                     check_flat_json_flags(&content, &path, findings);
                 }
@@ -376,12 +374,10 @@ fn check_bootstrapper_flag_array(
             None => continue,
         };
 
-        // Skip entries whose `flag` value isn't actually a Roblox FFlag-
-        // shaped identifier. AppleBlox's schema permits arbitrary strings
-        // and users occasionally type non-flag names here — without this
-        // guard the AppleBlox path would emit "Non-allowlisted FFlag" on
-        // gibberish.
-        if !looks_like_fflag_key(flag_name) {
+        // Skip entries whose `flag` value is neither flag-shaped nor an
+        // exact known suspicious engine toggle. AppleBlox's schema permits
+        // arbitrary strings and users occasionally type non-flag names here.
+        if !should_check_flag_key(flag_name) {
             continue;
         }
 
@@ -589,7 +585,7 @@ fn scan_tool_configs(findings: &mut Vec<ScanFinding>) {
                 if !content.trim().is_empty() {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(obj) = parsed.as_object() {
-                            let has_fflags = obj.keys().any(|k| looks_like_fflag_key(k));
+                            let has_fflags = obj.keys().any(|k| should_check_flag_key(k));
                             if has_fflags {
                                 check_flat_json_flags(&content, &path, findings);
                             }
@@ -757,6 +753,70 @@ mod tests {
 
         let any_flagged = findings.iter().any(|f| matches!(f.verdict, ScanVerdict::Flagged));
         assert!(any_flagged, "DFIntS2PhysicsSenderRate must produce a Flagged verdict; got: {:?}", findings);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exact_known_nonprefix_flag_is_flagged_in_flat_settings() {
+        let json = r#"{"NextGenReplicatorEnabledWrite4": false}"#;
+        let dir = tmpdir();
+        let path = dir.join("ClientAppSettings.json");
+
+        let mut findings = Vec::new();
+        check_flat_json_flags(json, &path, &mut findings);
+
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Flagged)
+                    && f.description.contains("NextGenReplicatorEnabledWrite4")
+            }),
+            "known non-prefix flags must not be skipped, got: {:?}",
+            findings
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exact_known_nonprefix_flag_is_flagged_in_bootstrapper_array() {
+        let dir = tmpdir();
+        let path = dir.join("appleblox.json");
+        let flags = serde_json::json!([
+            {
+                "flag": "NextGenReplicatorEnabledWrite4",
+                "enabled": true,
+                "value": "false"
+            }
+        ]);
+        let flags = flags.as_array().unwrap();
+
+        let mut findings = Vec::new();
+        check_bootstrapper_flag_array(flags, "AppleBlox", &path, &mut findings);
+
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Flagged)
+                    && f.description.contains("NextGenReplicatorEnabledWrite4")
+            }),
+            "known non-prefix bootstrapper flags must not be skipped, got: {:?}",
+            findings
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unrelated_nonprefix_keys_are_ignored() {
+        let json = r#"{"LauncherTheme": "dark"}"#;
+        let dir = tmpdir();
+        let path = dir.join("ClientAppSettings.json");
+
+        let mut findings = Vec::new();
+        check_flat_json_flags(json, &path, &mut findings);
+
+        assert!(
+            findings.is_empty(),
+            "unrelated launcher metadata must not become a flag finding: {:?}",
+            findings
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
