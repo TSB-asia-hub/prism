@@ -4,8 +4,8 @@
 
 use crate::data::flag_allowlist::is_allowed_flag;
 use crate::data::suspicious_flags::{
-    CRITICAL_FLAGS, HIGH_FLAGS, MEDIUM_FLAGS, get_flag_category, get_flag_description,
-    get_flag_severity,
+    get_flag_category, get_flag_description, get_flag_severity, CRITICAL_FLAGS, HIGH_FLAGS,
+    MEDIUM_FLAGS,
 };
 use crate::models::{ScanFinding, ScanVerdict};
 use crate::scanners::progress::ScanProgress;
@@ -76,7 +76,15 @@ const FNV1A64_PRIME: u64 = 0x100000001b3;
 const RUNTIME_TABLE_OFFSET_FROM_SINGLETON: usize = 0x8;
 const RUNTIME_TABLE_SIZE: usize = 0x38;
 const RUNTIME_TABLE_MAX_MASK: u64 = 0x00ff_ffff;
-const MAX_RUNTIME_TABLE_HEADERS_PER_SCAN: usize = 4096;
+const MAX_RUNTIME_TABLE_HEADERS_PER_SCAN: usize = 65_536;
+const RUNTIME_NODE_SIZE: usize = 0x38;
+const RUNTIME_NODE_STRING_OFFSET: usize = 0x10;
+const RUNTIME_NODE_LEN_OFFSET: usize = 0x20;
+const RUNTIME_NODE_CAP_OFFSET: usize = 0x28;
+const RUNTIME_NODE_ENTRY_OFFSET: usize = 0x30;
+const RUNTIME_INLINE_STRING_CAP: u64 = 0x0f;
+const MAX_RUNTIME_STRING_HITS_PER_CHUNK: usize = 1024;
+const MAX_RUNTIME_NODE_ENTRIES_PER_SCAN: usize = 8192;
 const RUNTIME_SINGLETON_ACCESSOR_PATTERN: &[Option<u8>] = &[
     Some(0x48),
     Some(0x83),
@@ -357,13 +365,52 @@ struct ToolMarkerHit {
     first_address: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeTableHeaderCandidate {
+    address: usize,
+    mask: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeStringHit {
+    name: &'static str,
+    offset: usize,
+    address: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeNodeEntryCandidate {
+    name: &'static str,
+    node_address: usize,
+    string_address: usize,
+    entry: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeLongStringNodeCandidate {
+    node_address: usize,
+    string_address: usize,
+    entry: usize,
+    len: usize,
+}
+
 /// Per-scan hit map. Keys are interned flag names (static strings for known
 /// flags, owned strings for unknown discoveries).
 #[derive(Default)]
 struct FlagHitTable {
     hits: HashMap<String, FlagHit>,
     tool_markers: HashMap<&'static str, ToolMarkerHit>,
-    runtime_table_headers: Vec<usize>,
+    runtime_table_headers: Vec<RuntimeTableHeaderCandidate>,
+    runtime_table_header_seen: HashSet<usize>,
+    runtime_table_header_matches: usize,
+    runtime_node_entries: Vec<RuntimeNodeEntryCandidate>,
+    runtime_node_entry_seen: HashSet<(&'static str, usize)>,
+    runtime_node_entry_matches: usize,
+    runtime_string_hits: Vec<RuntimeStringHit>,
+    runtime_string_hit_seen: HashSet<usize>,
+    runtime_long_string_nodes: Vec<RuntimeLongStringNodeCandidate>,
+    runtime_long_string_node_seen: HashSet<(usize, usize)>,
+    runtime_long_string_node_matches: usize,
 }
 
 impl FlagHitTable {
@@ -410,13 +457,76 @@ impl FlagHitTable {
         entry.count += 1;
     }
 
-    fn record_runtime_table_header(&mut self, address: usize) {
-        if self.runtime_table_headers.len() >= MAX_RUNTIME_TABLE_HEADERS_PER_SCAN
-            || self.runtime_table_headers.contains(&address)
-        {
+    fn record_runtime_table_header(&mut self, candidate: RuntimeTableHeaderCandidate) {
+        self.runtime_table_header_matches = self.runtime_table_header_matches.saturating_add(1);
+        self.keep_runtime_table_header(candidate);
+    }
+
+    fn keep_runtime_table_header(&mut self, candidate: RuntimeTableHeaderCandidate) {
+        if self.runtime_table_header_seen.contains(&candidate.address) {
             return;
         }
-        self.runtime_table_headers.push(address);
+        if self.runtime_table_headers.len() < MAX_RUNTIME_TABLE_HEADERS_PER_SCAN {
+            self.runtime_table_header_seen.insert(candidate.address);
+            self.runtime_table_headers.push(candidate);
+            return;
+        }
+
+        if let Some((weakest_index, weakest)) = self
+            .runtime_table_headers
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, existing)| existing.mask)
+        {
+            if candidate.mask <= weakest.mask {
+                return;
+            }
+            self.runtime_table_header_seen.remove(&weakest.address);
+            self.runtime_table_header_seen.insert(candidate.address);
+            self.runtime_table_headers[weakest_index] = candidate;
+        }
+    }
+
+    fn record_runtime_node_entry(&mut self, candidate: RuntimeNodeEntryCandidate) {
+        self.runtime_node_entry_matches = self.runtime_node_entry_matches.saturating_add(1);
+        self.keep_runtime_node_entry(candidate);
+    }
+
+    fn keep_runtime_node_entry(&mut self, candidate: RuntimeNodeEntryCandidate) {
+        let key = (candidate.name, candidate.entry);
+        if self.runtime_node_entry_seen.contains(&key) {
+            return;
+        }
+        if self.runtime_node_entries.len() >= MAX_RUNTIME_NODE_ENTRIES_PER_SCAN {
+            return;
+        }
+        self.runtime_node_entry_seen.insert(key);
+        self.runtime_node_entries.push(candidate);
+    }
+
+    fn record_runtime_string_hit(&mut self, hit: RuntimeStringHit) {
+        if self.runtime_string_hit_seen.contains(&hit.address) {
+            return;
+        }
+        if self.runtime_string_hits.len() >= MAX_RUNTIME_NODE_ENTRIES_PER_SCAN {
+            return;
+        }
+        self.runtime_string_hit_seen.insert(hit.address);
+        self.runtime_string_hits.push(hit);
+    }
+
+    fn record_runtime_long_string_node(&mut self, candidate: RuntimeLongStringNodeCandidate) {
+        self.runtime_long_string_node_matches =
+            self.runtime_long_string_node_matches.saturating_add(1);
+        let key = (candidate.string_address, candidate.entry);
+        if self.runtime_long_string_node_seen.contains(&key) {
+            return;
+        }
+        if self.runtime_long_string_nodes.len() >= MAX_RUNTIME_NODE_ENTRIES_PER_SCAN {
+            return;
+        }
+        self.runtime_long_string_node_seen.insert(key);
+        self.runtime_long_string_nodes.push(candidate);
     }
 
     fn total_flags(&self) -> usize {
@@ -469,8 +579,34 @@ impl FlagHitTable {
                 }
             }
         }
-        for table in other.runtime_table_headers {
-            self.record_runtime_table_header(table);
+        self.runtime_table_header_matches = self
+            .runtime_table_header_matches
+            .saturating_add(other.runtime_table_header_matches);
+        for candidate in other.runtime_table_headers {
+            self.keep_runtime_table_header(candidate);
+        }
+        self.runtime_node_entry_matches = self
+            .runtime_node_entry_matches
+            .saturating_add(other.runtime_node_entry_matches);
+        for candidate in other.runtime_node_entries {
+            self.keep_runtime_node_entry(candidate);
+        }
+        for hit in other.runtime_string_hits {
+            self.record_runtime_string_hit(hit);
+        }
+        self.runtime_long_string_node_matches = self
+            .runtime_long_string_node_matches
+            .saturating_add(other.runtime_long_string_node_matches);
+        for candidate in other.runtime_long_string_nodes {
+            let key = (candidate.string_address, candidate.entry);
+            if self.runtime_long_string_node_seen.contains(&key) {
+                continue;
+            }
+            if self.runtime_long_string_nodes.len() >= MAX_RUNTIME_NODE_ENTRIES_PER_SCAN {
+                continue;
+            }
+            self.runtime_long_string_node_seen.insert(key);
+            self.runtime_long_string_nodes.push(candidate);
         }
     }
 }
@@ -811,26 +947,34 @@ fn find_runtime_singleton_slots(buffer: &[u8], base_address: usize) -> Vec<usize
     out
 }
 
-fn runtime_table_header_bytes_look_plausible(table: &[u8]) -> bool {
+fn runtime_table_header_mask(table: &[u8]) -> Option<u64> {
     if table.len() < RUNTIME_TABLE_SIZE {
-        return false;
+        return None;
     }
 
     let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap());
     let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap());
     let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
 
-    sentinel != 0
+    (sentinel != 0
         && buckets != 0
         && sentinel != buckets
         && (sentinel & 0x7) == 0
         && (buckets & 0x7) == 0
         && mask != 0
         && (mask + 1).is_power_of_two()
-        && mask <= RUNTIME_TABLE_MAX_MASK
+        && mask <= RUNTIME_TABLE_MAX_MASK)
+        .then_some(mask)
 }
 
-fn find_runtime_table_headers(buffer: &[u8], base_address: usize) -> Vec<usize> {
+fn runtime_table_header_bytes_look_plausible(table: &[u8]) -> bool {
+    runtime_table_header_mask(table).is_some()
+}
+
+fn find_runtime_table_headers(
+    buffer: &[u8],
+    base_address: usize,
+) -> Vec<RuntimeTableHeaderCandidate> {
     let mut out = Vec::new();
     if buffer.len() < RUNTIME_TABLE_SIZE {
         return out;
@@ -839,8 +983,11 @@ fn find_runtime_table_headers(buffer: &[u8], base_address: usize) -> Vec<usize> 
     let aligned_start = (8usize.wrapping_sub(base_address & 0x7)) & 0x7;
     let mut i = aligned_start;
     while i + RUNTIME_TABLE_SIZE <= buffer.len() {
-        if runtime_table_header_bytes_look_plausible(&buffer[i..i + RUNTIME_TABLE_SIZE]) {
-            push_unique_runtime_slot(&mut out, base_address.saturating_add(i));
+        if let Some(mask) = runtime_table_header_mask(&buffer[i..i + RUNTIME_TABLE_SIZE]) {
+            let address = base_address.saturating_add(i);
+            if !out.iter().any(|candidate| candidate.address == address) {
+                out.push(RuntimeTableHeaderCandidate { address, mask });
+            }
         }
         i = i.saturating_add(8);
     }
@@ -1058,6 +1205,28 @@ fn known_flag_set() -> &'static HashSet<&'static str> {
         let mut s: HashSet<&'static str> = HashSet::with_capacity(known_suspicious_names().len());
         s.extend(known_suspicious_names().iter().copied());
         s
+    })
+}
+
+fn runtime_tracked_name_set() -> &'static HashSet<&'static str> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        RUNTIME_OVERRIDE_RULES
+            .iter()
+            .map(|rule| rule.name)
+            .collect()
+    })
+}
+
+fn runtime_tracked_name_lengths() -> &'static HashSet<usize> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<HashSet<usize>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        RUNTIME_OVERRIDE_RULES
+            .iter()
+            .map(|rule| rule.name.len())
+            .collect()
     })
 }
 
@@ -1391,7 +1560,9 @@ fn scan_ascii_known(
     base_address: usize,
     markers: &[MarkerMatch],
     table: &mut FlagHitTable,
-) {
+) -> Vec<RuntimeStringHit> {
+    let runtime_tracked = runtime_tracked_name_set();
+    let mut runtime_hits = Vec::new();
     let (ac, names) = known_ascii_automaton();
     for m in ac.find_iter(buffer) {
         let start = m.start();
@@ -1406,7 +1577,18 @@ fn scan_ascii_known(
             .as_ref()
             .and_then(|_| injector_context_summary_near(markers, start));
         table.record_with_value(name, address, false, value, context_summary);
+        if runtime_tracked.contains(name) && runtime_hits.len() < MAX_RUNTIME_STRING_HITS_PER_CHUNK
+        {
+            let hit = RuntimeStringHit {
+                name,
+                offset: start,
+                address,
+            };
+            table.record_runtime_string_hit(hit);
+            runtime_hits.push(hit);
+        }
     }
+    runtime_hits
 }
 
 /// Scan a buffer for UTF-16LE occurrences of any known suspicious flag name
@@ -1434,6 +1616,208 @@ fn scan_wide_known(
             .and_then(|_| injector_context_summary_near(markers, start));
         table.record_with_value(name, address, true, value, context_summary);
     }
+}
+
+fn read_u64_le_at(buffer: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let bytes = buffer.get(offset..end)?;
+    Some(u64::from_le_bytes(bytes.try_into().ok()?))
+}
+
+fn read_usize_le_at(buffer: &[u8], offset: usize) -> Option<usize> {
+    usize::try_from(read_u64_le_at(buffer, offset)?).ok()
+}
+
+fn record_runtime_node_if_valid(
+    buffer: &[u8],
+    base_address: usize,
+    node_offset: usize,
+    name: &'static str,
+    expected_string_address: usize,
+    table: &mut FlagHitTable,
+) {
+    let node_end = match node_offset.checked_add(RUNTIME_NODE_SIZE) {
+        Some(end) if end <= buffer.len() => end,
+        _ => return,
+    };
+    let node = &buffer[node_offset..node_end];
+    let len = match read_u64_le_at(node, RUNTIME_NODE_LEN_OFFSET) {
+        Some(len) => len as usize,
+        None => return,
+    };
+    if len != name.len() || len > MAX_IDENT_BODY_LEN + 16 {
+        return;
+    }
+
+    let cap = match read_u64_le_at(node, RUNTIME_NODE_CAP_OFFSET) {
+        Some(cap) => cap,
+        None => return,
+    };
+    let entry = match read_usize_le_at(node, RUNTIME_NODE_ENTRY_OFFSET) {
+        Some(entry) if entry != 0 && (entry & 0x7) == 0 => entry,
+        _ => return,
+    };
+
+    let string_address = if cap <= RUNTIME_INLINE_STRING_CAP {
+        if len > RUNTIME_INLINE_STRING_CAP as usize {
+            return;
+        }
+        let inline_end = RUNTIME_NODE_STRING_OFFSET + len;
+        if node.get(RUNTIME_NODE_STRING_OFFSET..inline_end) != Some(name.as_bytes()) {
+            return;
+        }
+        base_address.saturating_add(node_offset + RUNTIME_NODE_STRING_OFFSET)
+    } else {
+        let ptr = match read_usize_le_at(node, RUNTIME_NODE_STRING_OFFSET) {
+            Some(ptr) => ptr,
+            None => return,
+        };
+        if ptr != expected_string_address
+            || cap < len as u64
+            || cap > (MAX_IDENT_BODY_LEN + 32) as u64
+        {
+            return;
+        }
+        ptr
+    };
+
+    table.record_runtime_node_entry(RuntimeNodeEntryCandidate {
+        name,
+        node_address: base_address.saturating_add(node_offset),
+        string_address,
+        entry,
+    });
+}
+
+fn scan_runtime_node_entries(
+    buffer: &[u8],
+    base_address: usize,
+    runtime_hits: &[RuntimeStringHit],
+    table: &mut FlagHitTable,
+) {
+    if runtime_hits.is_empty() {
+        return;
+    }
+
+    for hit in runtime_hits
+        .iter()
+        .filter(|hit| hit.name.len() <= RUNTIME_INLINE_STRING_CAP as usize)
+    {
+        if hit.offset >= RUNTIME_NODE_STRING_OFFSET {
+            record_runtime_node_if_valid(
+                buffer,
+                base_address,
+                hit.offset - RUNTIME_NODE_STRING_OFFSET,
+                hit.name,
+                hit.address,
+                table,
+            );
+        }
+    }
+
+    let string_names: HashMap<usize, &'static str> = runtime_hits
+        .iter()
+        .filter(|hit| hit.name.len() > RUNTIME_INLINE_STRING_CAP as usize)
+        .map(|hit| (hit.address, hit.name))
+        .collect();
+    if string_names.is_empty() || buffer.len() < RUNTIME_NODE_STRING_OFFSET + 8 {
+        return;
+    }
+
+    let aligned_start = (8usize.wrapping_sub(base_address & 0x7)) & 0x7;
+    let mut offset = aligned_start;
+    while offset + 8 <= buffer.len() {
+        if let Some(ptr) = read_usize_le_at(buffer, offset) {
+            if let Some(&name) = string_names.get(&ptr) {
+                if offset >= RUNTIME_NODE_STRING_OFFSET {
+                    record_runtime_node_if_valid(
+                        buffer,
+                        base_address,
+                        offset - RUNTIME_NODE_STRING_OFFSET,
+                        name,
+                        ptr,
+                        table,
+                    );
+                }
+            }
+        }
+        offset = offset.saturating_add(8);
+    }
+}
+
+fn scan_runtime_long_string_node_candidates(
+    buffer: &[u8],
+    base_address: usize,
+    table: &mut FlagHitTable,
+) {
+    if buffer.len() < RUNTIME_NODE_SIZE {
+        return;
+    }
+    let tracked_lengths = runtime_tracked_name_lengths();
+    let aligned_start = (8usize.wrapping_sub(base_address & 0x7)) & 0x7;
+    let mut node_offset = aligned_start;
+    while node_offset + RUNTIME_NODE_SIZE <= buffer.len() {
+        let len = match read_u64_le_at(buffer, node_offset + RUNTIME_NODE_LEN_OFFSET) {
+            Some(len) => len as usize,
+            None => break,
+        };
+        if tracked_lengths.contains(&len) {
+            let cap = read_u64_le_at(buffer, node_offset + RUNTIME_NODE_CAP_OFFSET);
+            let string_address = read_usize_le_at(buffer, node_offset + RUNTIME_NODE_STRING_OFFSET);
+            let entry = read_usize_le_at(buffer, node_offset + RUNTIME_NODE_ENTRY_OFFSET);
+            if let (Some(cap), Some(string_address), Some(entry)) = (cap, string_address, entry) {
+                if cap > RUNTIME_INLINE_STRING_CAP
+                    && cap >= len as u64
+                    && cap <= (MAX_IDENT_BODY_LEN + 32) as u64
+                    && string_address != 0
+                    && (string_address & 0x7) == 0
+                    && entry != 0
+                    && (entry & 0x7) == 0
+                {
+                    table.record_runtime_long_string_node(RuntimeLongStringNodeCandidate {
+                        node_address: base_address.saturating_add(node_offset),
+                        string_address,
+                        entry,
+                        len,
+                    });
+                }
+            }
+        }
+        node_offset = node_offset.saturating_add(8);
+    }
+}
+
+fn resolved_runtime_node_entries(table: &FlagHitTable) -> Vec<RuntimeNodeEntryCandidate> {
+    let mut out = table.runtime_node_entries.clone();
+    let mut seen: HashSet<(&'static str, usize)> = out
+        .iter()
+        .map(|candidate| (candidate.name, candidate.entry))
+        .collect();
+    let strings_by_address: HashMap<usize, RuntimeStringHit> = table
+        .runtime_string_hits
+        .iter()
+        .map(|hit| (hit.address, *hit))
+        .collect();
+
+    for candidate in &table.runtime_long_string_nodes {
+        let Some(hit) = strings_by_address.get(&candidate.string_address) else {
+            continue;
+        };
+        if hit.name.len() != candidate.len {
+            continue;
+        }
+        let key = (hit.name, candidate.entry);
+        if seen.insert(key) {
+            out.push(RuntimeNodeEntryCandidate {
+                name: hit.name,
+                node_address: candidate.node_address,
+                string_address: candidate.string_address,
+                entry: candidate.entry,
+            });
+        }
+    }
+
+    out
 }
 
 fn to_utf16le(s: &str) -> Vec<u8> {
@@ -1475,11 +1859,13 @@ fn scan_buffer(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
     for header in find_runtime_table_headers(buffer, base_address) {
         table.record_runtime_table_header(header);
     }
+    scan_runtime_long_string_node_candidates(buffer, base_address, table);
 
     let markers = scan_tool_markers(buffer, base_address, table);
     // ASCII targeted scan — catches known suspicious names with and without
     // Roblox's standard FFlag prefixes. Collection is broad, verdicting is not.
-    scan_ascii_known(buffer, base_address, &markers, table);
+    let runtime_hits = scan_ascii_known(buffer, base_address, &markers, table);
+    scan_runtime_node_entries(buffer, base_address, &runtime_hits, table);
 
     // ASCII generic prefix scan — captures known AND unknown flags.
     for (offset, name, _is_known) in scan_prefix_hits(buffer) {
@@ -1646,14 +2032,14 @@ mod windows_impl {
     use rayon::prelude::*;
     use std::ffi::c_void;
     use std::mem;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, MAX_PATH};
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_IMAGE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
-        VirtualQueryEx,
+        VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_IMAGE, PAGE_EXECUTE_READ,
+        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE,
+        PAGE_WRITECOPY,
     };
     use windows_sys::Win32::System::ProcessStatus::{
         EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, LIST_MODULES_ALL,
@@ -1885,7 +2271,6 @@ mod windows_impl {
         path: Option<String>,
     }
 
-    const RUNTIME_NODE_SIZE: usize = 0x38;
     const RUNTIME_VALUE_PTR_OFFSET: usize = 0xC0;
     const RUNTIME_MAX_CHAIN_STEPS: usize = 128;
     const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
@@ -2093,6 +2478,14 @@ mod windows_impl {
             .any(|name| lookup_runtime_flag_entry(handle, singleton, name).is_some())
     }
 
+    fn runtime_registry_has_tracked_flag(handle: HANDLE, singleton: usize) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        RUNTIME_OVERRIDE_RULES
+            .iter()
+            .filter_map(|rule| seen.insert(rule.name).then_some(rule.name))
+            .any(|name| lookup_runtime_flag_entry(handle, singleton, name).is_some())
+    }
+
     fn runtime_candidates_have_probe(
         handle: HANDLE,
         candidates: &[RuntimeRegistryCandidate],
@@ -2133,13 +2526,14 @@ mod windows_impl {
                     }
                 }
 
-                for table in find_runtime_table_headers(&scratch[..size], addr) {
+                for table_candidate in find_runtime_table_headers(&scratch[..size], addr) {
+                    let table = table_candidate.address;
                     if table < RUNTIME_TABLE_OFFSET_FROM_SINGLETON {
                         continue;
                     }
                     let singleton = table - RUNTIME_TABLE_OFFSET_FROM_SINGLETON;
                     if runtime_table_header_looks_valid(handle, singleton)
-                        && runtime_registry_has_probe_flag(handle, singleton)
+                        && runtime_registry_has_tracked_flag(handle, singleton)
                     {
                         push_runtime_registry_candidate(
                             candidates,
@@ -2160,7 +2554,7 @@ mod windows_impl {
 
     fn discover_runtime_registry_candidates(
         handle: HANDLE,
-        heap_table_headers: &[usize],
+        heap_table_headers: &[RuntimeTableHeaderCandidate],
     ) -> Vec<RuntimeRegistryCandidate> {
         let modules = runtime_modules_windows(handle);
         let mut candidates = Vec::new();
@@ -2189,13 +2583,16 @@ mod windows_impl {
         }
 
         if !runtime_candidates_have_probe(handle, &candidates) {
-            for &table in heap_table_headers {
+            let mut heap_table_headers = heap_table_headers.to_vec();
+            heap_table_headers.sort_by(|a, b| b.mask.cmp(&a.mask));
+            for table_candidate in heap_table_headers {
+                let table = table_candidate.address;
                 if table < RUNTIME_TABLE_OFFSET_FROM_SINGLETON {
                     continue;
                 }
                 let singleton = table - RUNTIME_TABLE_OFFSET_FROM_SINGLETON;
                 if runtime_table_header_looks_valid(handle, singleton)
-                    && runtime_registry_has_probe_flag(handle, singleton)
+                    && runtime_registry_has_tracked_flag(handle, singleton)
                 {
                     push_runtime_table_header_candidate(
                         &mut candidates,
@@ -2316,9 +2713,15 @@ mod windows_impl {
     fn inspect_runtime_fflag_registry(
         handle: HANDLE,
         pid: u32,
-        heap_table_headers: &[usize],
+        heap_table_headers: &[RuntimeTableHeaderCandidate],
+        heap_table_header_matches: usize,
     ) -> Vec<ScanFinding> {
         let candidates = discover_runtime_registry_candidates(handle, heap_table_headers);
+        let heap_table_header_summary = format!(
+            "{}/{} kept",
+            heap_table_headers.len(),
+            heap_table_header_matches
+        );
         if candidates.is_empty() {
             return vec![ScanFinding::new(
                 "memory_scanner",
@@ -2327,7 +2730,7 @@ mod windows_impl {
                 Some(format!(
                     "PID: {} | Scanned Roblox image modules for strict accessors/Lorno-style RIP-relative singleton loads and {} heap registry-table header candidates, but no validated FastFlag table was found",
                     pid,
-                    heap_table_headers.len()
+                    heap_table_header_summary
                 )),
             )];
         }
@@ -2402,7 +2805,7 @@ mod windows_impl {
                     "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Registry entries read: {}",
                     pid,
                     candidates.len(),
-                    heap_table_headers.len(),
+                    heap_table_header_summary,
                     inspected
                 )),
             ));
@@ -2415,9 +2818,73 @@ mod windows_impl {
                     "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable",
                     pid,
                     candidates.len(),
-                    heap_table_headers.len()
+                    heap_table_header_summary
                 )),
             ));
+        }
+
+        findings
+    }
+
+    fn inspect_runtime_node_entries(
+        handle: HANDLE,
+        pid: u32,
+        node_entries: &[RuntimeNodeEntryCandidate],
+        node_entry_matches: usize,
+    ) -> Vec<ScanFinding> {
+        let node_entry_summary = format!("{}/{} kept", node_entries.len(), node_entry_matches);
+        let mut findings = Vec::new();
+
+        for candidate in node_entries {
+            let value_ptr = match read_process_u64(
+                handle,
+                candidate.entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET),
+            ) {
+                Some(ptr) if ptr != 0 => ptr as usize,
+                _ => continue,
+            };
+            let raw_value = match read_process_i32_bytes(handle, value_ptr) {
+                Some(raw) => raw,
+                None => continue,
+            };
+
+            for &rule in RUNTIME_OVERRIDE_RULES
+                .iter()
+                .filter(|rule| rule.name == candidate.name)
+            {
+                if !runtime_rule_matches_observed(rule, raw_value) {
+                    continue;
+                }
+
+                let verdict = get_flag_severity(rule.name);
+                let label = match verdict {
+                    ScanVerdict::Flagged => "Critical live FastFlag registry override",
+                    ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
+                    ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                        "Live FastFlag registry override"
+                    }
+                };
+                findings.push(ScanFinding::new(
+                    "memory_scanner",
+                    verdict,
+                    format!(
+                        "{}: \"{}\" = {}",
+                        label,
+                        rule.name,
+                        runtime_value_label(rule.value)
+                    ),
+                    Some(format!(
+                        "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Detection: resolved Roblox FastFlag node storage and read the live value storage used by memory injectors",
+                        pid,
+                        candidate.node_address,
+                        candidate.string_address,
+                        candidate.entry,
+                        value_ptr,
+                        node_entry_summary
+                    )),
+                ));
+                break;
+            }
         }
 
         findings
@@ -2691,11 +3158,43 @@ mod windows_impl {
 
         // Emit flag findings.
         findings.extend(findings_from_table(&table));
-        findings.extend(inspect_runtime_fflag_registry(
+        let registry_findings = inspect_runtime_fflag_registry(
             handle.0,
             pid,
             &table.runtime_table_headers,
-        ));
+            table.runtime_table_header_matches,
+        );
+        let registry_elevated = registry_findings.iter().any(|finding| {
+            matches!(
+                finding.verdict,
+                ScanVerdict::Flagged | ScanVerdict::Suspicious
+            )
+        });
+        let node_findings = if registry_elevated {
+            Vec::new()
+        } else {
+            let runtime_node_entries = resolved_runtime_node_entries(&table);
+            inspect_runtime_node_entries(
+                handle.0,
+                pid,
+                &runtime_node_entries,
+                table
+                    .runtime_node_entry_matches
+                    .saturating_add(table.runtime_long_string_node_matches),
+            )
+        };
+        let node_elevated = node_findings.iter().any(|finding| {
+            matches!(
+                finding.verdict,
+                ScanVerdict::Flagged | ScanVerdict::Suspicious
+            )
+        });
+        if registry_elevated || !node_elevated {
+            findings.extend(registry_findings);
+        }
+        if node_elevated {
+            findings.extend(node_findings);
+        }
 
         // Honest summary. Environmental / coverage failures are
         // Inconclusive, not Suspicious — slow disks, large processes, and
@@ -3189,10 +3688,9 @@ mod tests {
     fn prefix_scan_finds_known_flag() {
         let b = bytes("{\"DFIntS2PhysicsSenderRate\":1}");
         let hits = scan_prefix_hits(&b);
-        assert!(
-            hits.iter()
-                .any(|(_, n, known)| n == "DFIntS2PhysicsSenderRate" && *known)
-        );
+        assert!(hits
+            .iter()
+            .any(|(_, n, known)| n == "DFIntS2PhysicsSenderRate" && *known));
     }
 
     #[test]
@@ -3636,7 +4134,14 @@ mod tests {
         buffer[32..40].copy_from_slice(&0x6000_0000u64.to_le_bytes());
         buffer[56..64].copy_from_slice(&0xffu64.to_le_bytes());
 
-        assert_eq!(find_runtime_table_headers(&buffer, base), vec![table]);
+        let headers = find_runtime_table_headers(&buffer, base);
+        assert_eq!(
+            headers,
+            vec![RuntimeTableHeaderCandidate {
+                address: table,
+                mask: 0xff
+            }]
+        );
     }
 
     #[test]
@@ -3673,7 +4178,119 @@ mod tests {
         let mut hits = FlagHitTable::default();
         scan_buffer(&buffer, base, &mut hits);
 
-        assert_eq!(hits.runtime_table_headers, vec![table]);
+        assert_eq!(
+            hits.runtime_table_headers,
+            vec![RuntimeTableHeaderCandidate {
+                address: table,
+                mask: 0xff
+            }]
+        );
+        assert_eq!(hits.runtime_table_header_matches, 1);
+    }
+
+    #[test]
+    fn scan_buffer_records_runtime_long_string_node_entries() {
+        let base = 0x5000_0000usize;
+        let name = "DFFlagDebugDrawBroadPhaseAABBs";
+        let string_offset = 0x180usize;
+        let node_offset = 0x40usize;
+        let entry = 0x7000_0000usize;
+        let mut buffer = vec![0u8; 0x220];
+
+        buffer[string_offset..string_offset + name.len()].copy_from_slice(name.as_bytes());
+        buffer[node_offset + RUNTIME_NODE_STRING_OFFSET
+            ..node_offset + RUNTIME_NODE_STRING_OFFSET + 8]
+            .copy_from_slice(&((base + string_offset) as u64).to_le_bytes());
+        buffer[node_offset + RUNTIME_NODE_LEN_OFFSET..node_offset + RUNTIME_NODE_LEN_OFFSET + 8]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes());
+        buffer[node_offset + RUNTIME_NODE_CAP_OFFSET..node_offset + RUNTIME_NODE_CAP_OFFSET + 8]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes());
+        buffer
+            [node_offset + RUNTIME_NODE_ENTRY_OFFSET..node_offset + RUNTIME_NODE_ENTRY_OFFSET + 8]
+            .copy_from_slice(&(entry as u64).to_le_bytes());
+
+        let mut hits = FlagHitTable::default();
+        scan_buffer(&buffer, base, &mut hits);
+
+        assert_eq!(
+            hits.runtime_node_entries,
+            vec![RuntimeNodeEntryCandidate {
+                name,
+                node_address: base + node_offset,
+                string_address: base + string_offset,
+                entry,
+            }]
+        );
+        assert_eq!(hits.runtime_node_entry_matches, 1);
+    }
+
+    #[test]
+    fn runtime_node_entry_locator_rejects_wrong_length_nodes() {
+        let base = 0x5100_0000usize;
+        let name = "FIntCameraFarZPlane";
+        let string_offset = 0x180usize;
+        let node_offset = 0x40usize;
+        let entry = 0x7100_0000usize;
+        let mut buffer = vec![0u8; 0x220];
+
+        buffer[string_offset..string_offset + name.len()].copy_from_slice(name.as_bytes());
+        buffer[node_offset + RUNTIME_NODE_STRING_OFFSET
+            ..node_offset + RUNTIME_NODE_STRING_OFFSET + 8]
+            .copy_from_slice(&((base + string_offset) as u64).to_le_bytes());
+        buffer[node_offset + RUNTIME_NODE_LEN_OFFSET..node_offset + RUNTIME_NODE_LEN_OFFSET + 8]
+            .copy_from_slice(&((name.len() as u64) - 1).to_le_bytes());
+        buffer[node_offset + RUNTIME_NODE_CAP_OFFSET..node_offset + RUNTIME_NODE_CAP_OFFSET + 8]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes());
+        buffer
+            [node_offset + RUNTIME_NODE_ENTRY_OFFSET..node_offset + RUNTIME_NODE_ENTRY_OFFSET + 8]
+            .copy_from_slice(&(entry as u64).to_le_bytes());
+
+        let mut hits = FlagHitTable::default();
+        scan_buffer(&buffer, base, &mut hits);
+
+        assert!(hits.runtime_node_entries.is_empty());
+        assert_eq!(hits.runtime_node_entry_matches, 0);
+    }
+
+    #[test]
+    fn runtime_node_entries_resolve_when_string_and_node_are_in_different_chunks() {
+        let string_base = 0x5200_0000usize;
+        let node_base = 0x5300_0000usize;
+        let name = "FIntCameraFarZPlane";
+        let string_offset = 0x80usize;
+        let node_offset = 0x40usize;
+        let entry = 0x7200_0000usize;
+
+        let mut hits = FlagHitTable::default();
+        let mut string_buffer = vec![0u8; 0x120];
+        string_buffer[string_offset..string_offset + name.len()].copy_from_slice(name.as_bytes());
+        scan_buffer(&string_buffer, string_base, &mut hits);
+
+        let mut node_buffer = vec![0u8; 0x120];
+        node_buffer[node_offset + RUNTIME_NODE_STRING_OFFSET
+            ..node_offset + RUNTIME_NODE_STRING_OFFSET + 8]
+            .copy_from_slice(&((string_base + string_offset) as u64).to_le_bytes());
+        node_buffer
+            [node_offset + RUNTIME_NODE_LEN_OFFSET..node_offset + RUNTIME_NODE_LEN_OFFSET + 8]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes());
+        node_buffer
+            [node_offset + RUNTIME_NODE_CAP_OFFSET..node_offset + RUNTIME_NODE_CAP_OFFSET + 8]
+            .copy_from_slice(&(name.len() as u64).to_le_bytes());
+        node_buffer
+            [node_offset + RUNTIME_NODE_ENTRY_OFFSET..node_offset + RUNTIME_NODE_ENTRY_OFFSET + 8]
+            .copy_from_slice(&(entry as u64).to_le_bytes());
+        scan_buffer(&node_buffer, node_base, &mut hits);
+
+        assert!(hits.runtime_node_entries.is_empty());
+        assert_eq!(
+            resolved_runtime_node_entries(&hits),
+            vec![RuntimeNodeEntryCandidate {
+                name,
+                node_address: node_base + node_offset,
+                string_address: string_base + string_offset,
+                entry,
+            }]
+        );
     }
 
     #[test]
