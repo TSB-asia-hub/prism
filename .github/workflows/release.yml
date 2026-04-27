@@ -98,7 +98,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Use persistent Cargo target dir (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: powershell
+        run: |
+          $targetDir = 'C:\actions-cache\fflag-check\cargo-target'
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          "CARGO_TARGET_DIR=$targetDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using persistent Cargo target dir: $targetDir"
+
       - name: Cache cargo registry / target
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -143,7 +153,8 @@ jobs:
           ASSET_SUFFIX: ${{ matrix.asset_suffix }}
           TARGET: ${{ matrix.target }}
         run: |
-          $src = "src-tauri/target/$env:TARGET/release/fflag-check.exe"
+          $targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $src = Join-Path $targetRoot "$env:TARGET\release\fflag-check.exe"
           if (!(Test-Path $src)) { throw "Build output not found: $src" }
           $dest = "TSBCC-FFlag-Scanner-$env:TAG-$env:ASSET_SUFFIX"
           Copy-Item $src $dest
