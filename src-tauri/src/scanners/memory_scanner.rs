@@ -121,7 +121,6 @@ const INJECTOR_TOOL_MARKERS: &[&str] = &[
     "odessa",
     "robloxoffsetdumper",
     "offset_dumper",
-    "writeprocessmemory",
 ];
 
 #[derive(Clone, Copy)]
@@ -1548,10 +1547,6 @@ fn marker_is_strong_tool(name: &str) -> bool {
     )
 }
 
-fn marker_is_memory_writer(name: &str) -> bool {
-    name.eq_ignore_ascii_case("writeprocessmemory")
-}
-
 fn is_marker_delim(b: u8) -> bool {
     b == 0
         || b.is_ascii_whitespace()
@@ -1603,7 +1598,6 @@ fn injector_context_summary_near(markers: &[MarkerMatch], offset: usize) -> Opti
     let mut has_config = false;
     let mut has_address_cache = false;
     let mut has_strong_tool = false;
-    let mut has_writer = false;
     let mut nearby = Vec::new();
 
     for marker in markers
@@ -1613,15 +1607,13 @@ fn injector_context_summary_near(markers: &[MarkerMatch], offset: usize) -> Opti
         has_config |= marker_is_config(marker.name);
         has_address_cache |= marker_is_address_cache(marker.name);
         has_strong_tool |= marker_is_strong_tool(marker.name);
-        has_writer |= marker_is_memory_writer(marker.name);
         if nearby.len() < 8 && !nearby.contains(&marker.name) {
             nearby.push(marker.name);
         }
     }
 
-    let supported = (has_config && has_address_cache)
-        || (has_config && has_writer)
-        || (has_strong_tool && (has_config || has_address_cache || has_writer));
+    let supported =
+        (has_config && has_address_cache) || (has_strong_tool && (has_config || has_address_cache));
     if supported {
         Some(nearby.join(", "))
     } else {
@@ -2143,15 +2135,16 @@ fn marker_summary(table: &FlagHitTable) -> String {
 ///
 /// A cheat verdict fires via two evidence paths, mutually exclusive per flag:
 /// 1. **Context-backed** — a known suspicious flag has an adjacent parsed
-///    value AND that value is near injector / offset-tool provenance such as
-///    `fflags.json` + `address.json`, `LornoFix`, or `WriteProcessMemory`.
+///    value AND that value is near structured injector / offset-tool
+///    provenance such as `fflags.json` + `address.json` or
+///    `LornoFix` + `address.json`.
 ///    Verdict reflects the rule's canonical severity (`Flagged` for CRITICAL,
 ///    `Suspicious` for HIGH/MEDIUM).
 /// 2. **Value-match (capped)** — a known suspicious flag has an adjacent
 ///    parsed value that matches a curated `RUNTIME_OVERRIDE_RULES` entry
 ///    whose `string_scan_promote: true`, without nearby tool markers. This
-///    catches direct `WriteProcessMemory` injections that don't leave
-///    config-file strings in adjacent heap. The verdict is **capped at
+///    catches direct memory writes that don't leave config-file strings in
+///    adjacent heap. The verdict is **capped at
 ///    `Suspicious`** regardless of the rule's canonical severity, so the
 ///    operator gets a flag-for-review signal without an auto-Flagged
 ///    accusation. Bool rules and plausibly-vanilla int values do not
@@ -4269,6 +4262,65 @@ mod tests {
     }
 
     #[test]
+    fn clean_roblox_remote_config_baseline_values_stay_clean() {
+        // Captured from a clean Roblox baseline export. These are suspicious
+        // names in isolation, but Roblox's own remote-config heap blob carries
+        // them with normal values. The memory scanner must use these as a map
+        // of where flags live, not as verdict evidence.
+        let b = bytes(
+            r#"{
+                "DFIntPhysicsSenderMaxBandwidthBps":"38760",
+                "DFIntRaycastMaxDistance":"15000",
+                "DFIntReplicatorAnimationTrackLimitPerAnimator":"50",
+                "DFIntS2PhysicsSenderRate":"15",
+                "DFFlagDebugDrawEnable":"True",
+                "FIntCameraFarZPlane":"100000",
+                "FIntCameraMaxZoomDistance":"400",
+                "FFlagLargeReplicatorRead5":"True",
+                "FFlagLargeReplicatorEnabled9":"True",
+                "FFlagLargeReplicatorWrite5":"True",
+                "FFlagLargeReplicatorSerializeRead3":"True",
+                "FFlagLargeReplicatorSerializeWrite4":"True"
+            }"#,
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x9200, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "clean Roblox baseline values must stay informational, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn writeprocessmemory_api_string_is_not_injector_context() {
+        // Clean Roblox/Windows memory naturally contains WriteProcessMemory
+        // in import/API string tables. It is too broad to be provenance and
+        // must not pair with fflags.json to promote a heap value.
+        let b = bytes(r#"fflags.json WriteProcessMemory {"DFIntS2PhysicsSenderRate":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x9300, &mut table);
+        assert!(
+            !table.tool_markers.contains_key("writeprocessmemory"),
+            "WriteProcessMemory should be ignored as a marker: {:?}",
+            marker_summary(&table)
+        );
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "API string must not create injector context, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
     fn curated_value_sample_survives_vanilla_sample_eviction() {
         // T5 regression: MAX_VALUE_SAMPLES_PER_FLAG used to be a strict
         // FIFO cap with asymmetric eviction — only context-bearing samples
@@ -4309,7 +4361,11 @@ mod tests {
         assert!(
             entry.value_samples.iter().any(|s| s.value == "-30"),
             "curated-match sample must survive vanilla saturation, got: {:?}",
-            entry.value_samples.iter().map(|s| &s.value).collect::<Vec<_>>()
+            entry
+                .value_samples
+                .iter()
+                .map(|s| &s.value)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -4891,7 +4947,9 @@ mod tests {
             findings
         );
         assert!(
-            !findings.iter().any(|f| matches!(f.verdict, ScanVerdict::Flagged)),
+            !findings
+                .iter()
+                .any(|f| matches!(f.verdict, ScanVerdict::Flagged)),
             "value-match path must never emit Flagged, got: {:?}",
             findings
         );
