@@ -137,7 +137,7 @@ jobs:
       - name: Stage release asset (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         id: stage_win
-        shell: pwsh
+        shell: powershell
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           ASSET_SUFFIX: ${{ matrix.asset_suffix }}
