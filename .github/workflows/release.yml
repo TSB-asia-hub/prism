@@ -54,13 +54,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-testbench
+            runs_on: '["self-hosted","Windows","X64","testbench","fflag-check"]'
             target: x86_64-pc-windows-msvc
             asset_suffix: 'windows-portable.exe'
           - os: macos-latest
+            runs_on: '"macos-latest"'
             target: aarch64-apple-darwin
             asset_suffix: 'macos-aarch64.dmg'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,7 +107,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Windows portable build
-        if: matrix.os == 'windows-latest'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: npm run tauri -- build --no-bundle --target ${{ matrix.target }}
 
       - name: macOS bundle build (.app + .dmg)
@@ -113,7 +115,7 @@ jobs:
         run: npm run tauri -- build --target ${{ matrix.target }} --bundles app,dmg
 
       - name: Stage release asset (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         id: stage_win
         shell: pwsh
         env:
