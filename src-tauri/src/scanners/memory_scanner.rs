@@ -193,6 +193,54 @@ struct RuntimeFlagBaseline {
 
 const RUNTIME_FLAG_BASELINES: &[RuntimeFlagBaseline] = &[
     RuntimeFlagBaseline {
+        name: "DFIntS2PhysicsSenderRate",
+        default_value: RuntimeFlagValue::Int(15),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Physics sender rate diverges from clean Roblox baseline; external FFlag patchers use this for desync/fake-lag",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntPhysicsSenderMaxBandwidthBps",
+        default_value: RuntimeFlagValue::Int(38_760),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Physics replication bandwidth cap diverges from clean Roblox baseline; low values starve server-side position updates",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntReplicatorAnimationTrackLimitPerAnimator",
+        default_value: RuntimeFlagValue::Int(50),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Animation-track replication limit diverges from clean Roblox baseline; exploit configs set negative values to hide animations",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntGameNetPVHeaderRotationalVelocityZeroCutoffExponent",
+        default_value: RuntimeFlagValue::Int(-2),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Game-network rotational velocity cutoff exponent diverges from clean Roblox baseline",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntRaycastMaxDistance",
+        default_value: RuntimeFlagValue::Int(15_000),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Raycast max distance diverges from clean Roblox baseline; very low values can break hit-detection systems",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntMaxMissedWorldStepsRemembered",
+        default_value: RuntimeFlagValue::Int(16),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Missed-world-step buffer diverges from clean Roblox baseline; inflated values can extend desync windows",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntMaxActiveAnimationTracks",
+        default_value: RuntimeFlagValue::Int(64),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Max active animation tracks diverges from clean Roblox baseline; zero can freeze replicated animations",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
+        default_value: RuntimeFlagValue::Int(1),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Humanoid PD-controller substep multiplier diverges from clean Roblox baseline; extreme values are used for gravity/force manipulation",
+    },
+    RuntimeFlagBaseline {
         name: "DFFlagDebugDrawBroadPhaseAABBs",
         default_value: RuntimeFlagValue::Bool(false),
         deviation_verdict: ScanVerdict::Flagged,
@@ -1176,6 +1224,47 @@ fn runtime_flag_baseline_finding(
     ))
 }
 
+fn runtime_node_baseline_finding(
+    pid: u32,
+    baseline: &RuntimeFlagBaseline,
+    candidate: &RuntimeNodeEntryCandidate,
+    node_entry_summary: &str,
+    value_ptr: usize,
+    raw_value: [u8; 4],
+) -> Option<ScanFinding> {
+    let observed = runtime_value_from_raw(raw_value, baseline.default_value);
+    if observed == baseline.default_value {
+        return None;
+    }
+
+    Some(ScanFinding::new(
+        "memory_scanner",
+        baseline.deviation_verdict.clone(),
+        format!(
+            "Live FastFlag deviates from baseline: \"{}\" = {} (default: {})",
+            baseline.name,
+            runtime_value_label(observed),
+            runtime_value_label(baseline.default_value)
+        ),
+        Some(format!(
+            "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Note: {}",
+            pid,
+            candidate.node_address,
+            candidate.string_address,
+            candidate.entry,
+            value_ptr,
+            node_entry_summary,
+            baseline.note
+        )),
+    ))
+}
+
+fn runtime_baseline_for_name(name: &str) -> Option<&'static RuntimeFlagBaseline> {
+    RUNTIME_FLAG_BASELINES
+        .iter()
+        .find(|baseline| baseline.name == name)
+}
+
 fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
     let observed_int = i32::from_le_bytes(raw_value);
     match rule.value {
@@ -1186,6 +1275,13 @@ fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) 
             _ => false,
         },
     }
+}
+
+fn runtime_exact_rule_matches_name(name: &str, raw_value: [u8; 4]) -> bool {
+    RUNTIME_OVERRIDE_RULES
+        .iter()
+        .filter(|rule| rule.name == name)
+        .any(|&rule| runtime_rule_matches_observed(rule, raw_value))
 }
 
 /// String-form value match used by the heap string-scan promotion path.
@@ -3160,6 +3256,9 @@ mod windows_impl {
                     Some(raw) => raw,
                     None => continue,
                 };
+                if runtime_exact_rule_matches_name(baseline.name, raw_value) {
+                    continue;
+                }
                 if let Some(finding) = runtime_flag_baseline_finding(
                     pid,
                     baseline,
@@ -3198,6 +3297,7 @@ mod windows_impl {
                 None => continue,
             };
 
+            let mut emitted_exact_rule = false;
             for &rule in RUNTIME_OVERRIDE_RULES
                 .iter()
                 .filter(|rule| rule.name == candidate.name)
@@ -3233,7 +3333,23 @@ mod windows_impl {
                         node_entry_summary
                     )),
                 ));
+                emitted_exact_rule = true;
                 break;
+            }
+
+            if !emitted_exact_rule {
+                if let Some(baseline) = runtime_baseline_for_name(candidate.name) {
+                    if let Some(finding) = runtime_node_baseline_finding(
+                        pid,
+                        baseline,
+                        candidate,
+                        &node_entry_summary,
+                        value_ptr,
+                        raw_value,
+                    ) {
+                        findings.push(finding);
+                    }
+                }
             }
         }
 
@@ -4790,6 +4906,52 @@ mod tests {
     }
 
     #[test]
+    fn runtime_baseline_sender_rate_deviation_reports_arbitrary_value() {
+        let finding = runtime_flag_baseline_finding(
+            1234,
+            baseline("DFIntS2PhysicsSenderRate"),
+            0x1000,
+            0x2000,
+            0x3000,
+            240i32.to_le_bytes(),
+        )
+        .expect("baseline deviation");
+
+        assert!(matches!(finding.verdict, ScanVerdict::Suspicious));
+        assert!(finding.description.contains("DFIntS2PhysicsSenderRate"));
+        assert!(finding.description.contains("= 240"));
+        assert!(finding.description.contains("default: 15"));
+    }
+
+    #[test]
+    fn runtime_node_baseline_deviation_reports_arbitrary_value() {
+        let candidate = RuntimeNodeEntryCandidate {
+            name: "DFIntS2PhysicsSenderRate",
+            node_address: 0x1100,
+            string_address: 0x1200,
+            entry: 0x1300,
+        };
+        let finding = runtime_node_baseline_finding(
+            1234,
+            baseline("DFIntS2PhysicsSenderRate"),
+            &candidate,
+            "1/1 kept",
+            0x1400,
+            240i32.to_le_bytes(),
+        )
+        .expect("node baseline deviation");
+
+        assert!(matches!(finding.verdict, ScanVerdict::Suspicious));
+        assert!(finding.description.contains("DFIntS2PhysicsSenderRate"));
+        assert!(finding.description.contains("default: 15"));
+        assert!(finding
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Registry node: 0x1100"));
+    }
+
+    #[test]
     fn runtime_baselines_matching_defaults_emit_no_findings() {
         let findings = inspect_runtime_flag_baselines_synthetic(1234, &[0x1000], |_, baseline| {
             let raw_value = match baseline.default_value {
@@ -4876,6 +5038,38 @@ mod tests {
             !matches!(finding.verdict, ScanVerdict::Flagged),
             "camera far-plane default drift must not become a hard Flagged verdict"
         );
+    }
+
+    #[test]
+    fn runtime_baseline_table_covers_clean_dump_defaults() {
+        for (name, value) in [
+            ("DFIntS2PhysicsSenderRate", RuntimeFlagValue::Int(15)),
+            (
+                "DFIntPhysicsSenderMaxBandwidthBps",
+                RuntimeFlagValue::Int(38_760),
+            ),
+            (
+                "DFIntReplicatorAnimationTrackLimitPerAnimator",
+                RuntimeFlagValue::Int(50),
+            ),
+            (
+                "DFIntGameNetPVHeaderRotationalVelocityZeroCutoffExponent",
+                RuntimeFlagValue::Int(-2),
+            ),
+            ("DFIntRaycastMaxDistance", RuntimeFlagValue::Int(15_000)),
+            (
+                "DFIntMaxMissedWorldStepsRemembered",
+                RuntimeFlagValue::Int(16),
+            ),
+            ("DFIntMaxActiveAnimationTracks", RuntimeFlagValue::Int(64)),
+            (
+                "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
+                RuntimeFlagValue::Int(1),
+            ),
+            ("FIntCameraFarZPlane", RuntimeFlagValue::Int(100_000)),
+        ] {
+            assert_eq!(baseline(name).default_value, value);
+        }
     }
 
     #[test]

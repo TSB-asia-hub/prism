@@ -944,7 +944,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("fflag_check_self_scan_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        let exe = root.join("TSBCC-FFlag-Scanner-v0.6.11-windows-portable.exe");
+        let exe = root.join("TSBCC-FFlag-Scanner-v0.6.12-windows-portable.exe");
         std::fs::write(&exe, b"MZ\x90\x00").unwrap();
 
         let current = exe.canonicalize().unwrap();
