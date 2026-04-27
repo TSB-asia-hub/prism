@@ -33,6 +33,7 @@ const FFLAG_KEY_PREFIXES: &[&str] = &[
 pub async fn scan() -> Vec<ScanFinding> {
     let mut findings = Vec::new();
     let roots = get_search_roots();
+    let current_exe = current_exe_canonical();
 
     // Track every absolute path we've already reported on, so the same file
     // isn't double-flagged when overlapping search roots cause it to be
@@ -121,6 +122,9 @@ pub async fn scan() -> Vec<ScanFinding> {
 
         for entry in walker {
             if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_current_executable_path(entry.path(), current_exe.as_deref()) {
                 continue;
             }
 
@@ -358,6 +362,30 @@ pub async fn scan() -> Vec<ScanFinding> {
 /// Lowercased file extension, or None for files without one.
 fn lower_ext(path: &Path) -> Option<String> {
     path.extension().map(|e| e.to_string_lossy().to_lowercase())
+}
+
+fn current_exe_canonical() -> Option<PathBuf> {
+    let path = std::env::current_exe().ok()?;
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+fn is_current_executable_path(path: &Path, current_exe: Option<&Path>) -> bool {
+    let Some(current_exe) = current_exe else {
+        return false;
+    };
+    let candidate = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    same_path_for_scan_exclusion(&candidate, current_exe)
+}
+
+#[cfg(target_os = "windows")]
+fn same_path_for_scan_exclusion(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn same_path_for_scan_exclusion(left: &Path, right: &Path) -> bool {
+    left == right
 }
 
 /// Stream-hash a file as SHA-256, returning lowercase hex. Returns None on I/O
@@ -909,6 +937,25 @@ mod tests {
     fn lower_ext_normalises_case() {
         assert_eq!(lower_ext(Path::new("x/Y/Foo.EXE")).as_deref(), Some("exe"));
         assert_eq!(lower_ext(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn self_scan_exclusion_matches_current_exe_path() {
+        let root =
+            std::env::temp_dir().join(format!("fflag_check_self_scan_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let exe = root.join("TSBCC-FFlag-Scanner-v0.6.11-windows-portable.exe");
+        std::fs::write(&exe, b"MZ\x90\x00").unwrap();
+
+        let current = exe.canonicalize().unwrap();
+        assert!(is_current_executable_path(&exe, Some(&current)));
+
+        let other = root.join("LornoFix.exe");
+        std::fs::write(&other, b"MZ\x90\x00").unwrap();
+        assert!(!is_current_executable_path(&other, Some(&current)));
+        assert!(!is_current_executable_path(&exe, None));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

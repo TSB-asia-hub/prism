@@ -308,31 +308,6 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
-        name: "LargeReplicatorEnabled9",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
-        name: "LargeReplicatorSerializeWrite4",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
-        name: "LargeReplicatorSerializeRead3",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
-        name: "LargeReplicatorWrite5",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
-        name: "LargeReplicatorRead5",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
         name: "DFIntReplicatorAnimationTrackLimitPerAnimator",
         value: RuntimeFlagValue::Int(-1),
         string_scan_promote: false,
@@ -414,11 +389,6 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
     RuntimeOverrideRule {
         name: "DFFlagDebugDrawBvhNodes",
-        value: RuntimeFlagValue::Bool(true),
-        string_scan_promote: false,
-    },
-    RuntimeOverrideRule {
-        name: "DFFlagDebugDrawEnable",
         value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
     },
@@ -5133,6 +5103,38 @@ mod tests {
         assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 2i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, (-1i32).to_le_bytes()));
+    }
+
+    #[test]
+    fn large_replicator_true_defaults_are_not_live_registry_override_rules() {
+        // Captured clean Roblox baselines show these LargeReplicator bools as
+        // true in vanilla clients. The live registry scanner must not treat
+        // that vanilla-shaped value as direct injected-value proof.
+        for name in [
+            "LargeReplicatorEnabled9",
+            "LargeReplicatorSerializeWrite4",
+            "LargeReplicatorSerializeRead3",
+            "LargeReplicatorWrite5",
+            "LargeReplicatorRead5",
+        ] {
+            assert!(
+                !RUNTIME_OVERRIDE_RULES.iter().any(|rule| {
+                    rule.name == name && rule.value == RuntimeFlagValue::Bool(true)
+                }),
+                "{}=true must not be a live registry override rule",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn debug_draw_enable_true_default_is_not_live_registry_override_rule() {
+        // Multiple clean Roblox memory exports for version-390ba09e7e944154
+        // contain this true value, so it is baseline data rather than proof of
+        // an injected override.
+        assert!(!RUNTIME_OVERRIDE_RULES.iter().any(|rule| {
+            rule.name == "DFFlagDebugDrawEnable" && rule.value == RuntimeFlagValue::Bool(true)
+        }));
     }
 
     #[test]

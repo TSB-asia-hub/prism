@@ -16,7 +16,7 @@ use std::time::Instant;
 
 const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_PROCESS_HINT: &str = "robloxplayerbeta";
-const DEFAULT_CONTEXT_BYTES: usize = 96;
+const DEFAULT_CONTEXT_BYTES: usize = 0;
 /// `0` means "record every match". Clean-baseline mapping is explicitly
 /// allowed to get noisy; the scan should not stop just because Roblox has
 /// thousands of ordinary flag names resident.
@@ -80,11 +80,6 @@ const RUNTIME_RULES: &[(&str, ExpectedValue)] = &[
     ("FFlagDebugUseCustomSimRadius", ExpectedValue::Bool(true)),
     ("NextGenReplicatorEnabledWrite4", ExpectedValue::Bool(true)),
     ("NextGenReplicatorEnabledRead", ExpectedValue::Bool(true)),
-    ("LargeReplicatorEnabled9", ExpectedValue::Bool(true)),
-    ("LargeReplicatorSerializeWrite4", ExpectedValue::Bool(true)),
-    ("LargeReplicatorSerializeRead3", ExpectedValue::Bool(true)),
-    ("LargeReplicatorWrite5", ExpectedValue::Bool(true)),
-    ("LargeReplicatorRead5", ExpectedValue::Bool(true)),
     (
         "DFIntReplicatorAnimationTrackLimitPerAnimator",
         ExpectedValue::Int(-1),
@@ -135,7 +130,6 @@ const RUNTIME_RULES: &[(&str, ExpectedValue)] = &[
     ("DFIntMaxActiveAnimationTracks", ExpectedValue::Int(0)),
     ("DFFlagDebugDrawBroadPhaseAABBs", ExpectedValue::Bool(true)),
     ("DFFlagDebugDrawBvhNodes", ExpectedValue::Bool(true)),
-    ("DFFlagDebugDrawEnable", ExpectedValue::Bool(true)),
     ("FIntCameraFarZPlane", ExpectedValue::Int(0)),
     ("FIntCameraFarZPlane", ExpectedValue::Int(1)),
     ("DFIntDebugRestrictGCDistance", ExpectedValue::Int(1)),
@@ -429,7 +423,7 @@ fn help_text() -> String {
         "  --pid <pid>                 read a specific process id",
         "  --process <name>            process-name hint, default robloxplayerbeta",
         "  --out <path>                output JSON path",
-        "  --context-bytes <n>         bytes before/after each match, capped at 1024",
+        "  --context-bytes <n>         bytes before/after each match, capped at 1024; default 0",
         "  --max-matches <n>           output match cap; 0 records every match",
         "  --max-scan-mib <n>          stop scanning after this many MiB",
         "  --timeout-seconds <n>       wall-clock scan cap",
@@ -459,7 +453,6 @@ fn default_error_output_filename() -> String {
 }
 
 fn write_default_outputs(filename: &str, bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
-    let mut saved = Vec::new();
     let mut failures = Vec::new();
 
     for dir in default_output_dirs() {
@@ -469,19 +462,15 @@ fn write_default_outputs(filename: &str, bytes: &[u8]) -> Result<Vec<PathBuf>, S
         }
         let path = dir.join(filename);
         match std::fs::write(&path, bytes) {
-            Ok(()) => saved.push(path),
+            Ok(()) => return Ok(vec![path]),
             Err(e) => failures.push(format!("{}: {e}", path.display())),
         }
     }
 
-    if saved.is_empty() {
-        Err(format!(
-            "failed to write output to any Desktop/fallback location: {}",
-            failures.join(" | ")
-        ))
-    } else {
-        Ok(saved)
-    }
+    Err(format!(
+        "failed to write output to any Desktop/fallback location: {}",
+        failures.join(" | ")
+    ))
 }
 
 fn default_output_dirs() -> Vec<PathBuf> {
@@ -1642,6 +1631,11 @@ mod tests {
         let ev = evidence_from_match(&raw, buf, 0x2000, 16);
         assert_eq!(ev.parsed_value.as_deref(), Some("-30"));
         assert_eq!(ev.priority, 95);
+    }
+
+    #[test]
+    fn debug_draw_enable_true_default_is_not_exact_runtime_rule() {
+        assert!(!runtime_rule_value_matches("DFFlagDebugDrawEnable", "True"));
     }
 
     #[test]
