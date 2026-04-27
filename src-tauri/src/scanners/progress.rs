@@ -19,7 +19,9 @@ use tauri::{AppHandle, Emitter};
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScanProgressEvent {
-    Started { scanner: &'static str },
+    Started {
+        scanner: &'static str,
+    },
     Done {
         scanner: &'static str,
         findings: usize,

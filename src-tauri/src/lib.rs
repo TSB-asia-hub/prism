@@ -1,8 +1,8 @@
-mod models;
-mod scanners;
-mod reports;
-mod data;
 mod commands;
+mod data;
+mod models;
+mod reports;
+mod scanners;
 mod util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

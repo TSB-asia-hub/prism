@@ -116,6 +116,7 @@ const INJECTOR_TOOL_MARKERS: &[&str] = &[
     "fflagtoolkit",
     "fflag_injector",
     "fflag-manager",
+    "lorno bypass",
     "lornofix",
     "lornobypass",
     "odessa",
@@ -174,6 +175,36 @@ struct RuntimeOverrideRule {
     /// plausibly use it as a default.
     string_scan_promote: bool,
 }
+
+/// A flag whose live default is stable enough that a deviation is useful
+/// evidence of an external write to the FastFlag registry.
+///
+/// Curation discipline is load-bearing: if the encoded default is wrong, a
+/// vanilla client can raise a finding. Keep this list small, prefer debug
+/// flags that should never be enabled in a shipping player, and use
+/// Suspicious rather than Flagged for any default with build-to-build wiggle.
+#[derive(Clone, Debug)]
+struct RuntimeFlagBaseline {
+    name: &'static str,
+    default_value: RuntimeFlagValue,
+    deviation_verdict: ScanVerdict,
+    note: &'static str,
+}
+
+const RUNTIME_FLAG_BASELINES: &[RuntimeFlagBaseline] = &[
+    RuntimeFlagBaseline {
+        name: "DFFlagDebugDrawBroadPhaseAABBs",
+        default_value: RuntimeFlagValue::Bool(false),
+        deviation_verdict: ScanVerdict::Flagged,
+        note: "Debug-draw flag enabled - wallhack/ESP indicator (LornoFix default exploit value: true)",
+    },
+    RuntimeFlagBaseline {
+        name: "FIntCameraFarZPlane",
+        default_value: RuntimeFlagValue::Int(100_000),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Camera far-clip plane diverges from baseline - exploit sets 0 to disable culling",
+    },
+];
 
 /// Values seen in public desync/ESP configs or in the deobfuscated
 /// LornoFix payload. Runtime registry inspection only elevates exact
@@ -1138,6 +1169,43 @@ fn runtime_value_label(value: RuntimeFlagValue) -> String {
     }
 }
 
+fn runtime_value_from_raw(raw_value: [u8; 4], shape: RuntimeFlagValue) -> RuntimeFlagValue {
+    let observed_int = i32::from_le_bytes(raw_value);
+    match shape {
+        RuntimeFlagValue::Bool(_) => RuntimeFlagValue::Bool(observed_int != 0),
+        RuntimeFlagValue::Int(_) => RuntimeFlagValue::Int(observed_int),
+    }
+}
+
+fn runtime_flag_baseline_finding(
+    pid: u32,
+    baseline: &RuntimeFlagBaseline,
+    singleton: usize,
+    entry: usize,
+    value_ptr: usize,
+    raw_value: [u8; 4],
+) -> Option<ScanFinding> {
+    let observed = runtime_value_from_raw(raw_value, baseline.default_value);
+    if observed == baseline.default_value {
+        return None;
+    }
+
+    Some(ScanFinding::new(
+        "memory_scanner",
+        baseline.deviation_verdict.clone(),
+        format!(
+            "Live FastFlag deviates from baseline: \"{}\" = {} (default: {})",
+            baseline.name,
+            runtime_value_label(observed),
+            runtime_value_label(baseline.default_value)
+        ),
+        Some(format!(
+            "PID: {} | Singleton: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Note: {}",
+            pid, singleton, entry, value_ptr, baseline.note
+        )),
+    ))
+}
+
 fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
     let observed_int = i32::from_le_bytes(raw_value);
     match rule.value {
@@ -1540,6 +1608,7 @@ fn marker_is_strong_tool(name: &str) -> bool {
         "fflagtoolkit"
             | "fflag_injector"
             | "fflag-manager"
+            | "lorno bypass"
             | "lornofix"
             | "lornobypass"
             | "robloxoffsetdumper"
@@ -3064,6 +3133,8 @@ mod windows_impl {
             }
         }
 
+        findings.extend(inspect_runtime_flag_baselines(handle, pid, &candidates));
+
         if findings.is_empty() && inspected > 0 {
             findings.push(ScanFinding::new(
                 "memory_scanner",
@@ -3089,6 +3160,47 @@ mod windows_impl {
                     heap_table_header_summary
                 )),
             ));
+        }
+
+        findings
+    }
+
+    fn inspect_runtime_flag_baselines(
+        handle: HANDLE,
+        pid: u32,
+        candidates: &[RuntimeRegistryCandidate],
+    ) -> Vec<ScanFinding> {
+        let mut findings = Vec::new();
+
+        for candidate in candidates {
+            for baseline in RUNTIME_FLAG_BASELINES {
+                let entry =
+                    match lookup_runtime_flag_entry(handle, candidate.singleton, baseline.name) {
+                        Some(entry) => entry,
+                        None => continue,
+                    };
+                let value_ptr = match read_process_u64(
+                    handle,
+                    entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET),
+                ) {
+                    Some(ptr) if ptr != 0 => ptr as usize,
+                    _ => continue,
+                };
+                let raw_value = match read_process_i32_bytes(handle, value_ptr) {
+                    Some(raw) => raw,
+                    None => continue,
+                };
+                if let Some(finding) = runtime_flag_baseline_finding(
+                    pid,
+                    baseline,
+                    candidate.singleton,
+                    entry,
+                    value_ptr,
+                    raw_value,
+                ) {
+                    findings.push(finding);
+                }
+            }
         }
 
         findings
@@ -4545,6 +4657,37 @@ mod tests {
     }
 
     #[test]
+    fn spaced_lorno_bypass_marker_with_address_cache_taints_runtime_value() {
+        let b = bytes(r#"Lorno Bypass address.json {"DFIntS2PhysicsSenderRate":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xD240, &mut table);
+        assert!(table.tool_markers.contains_key("lorno bypass"));
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Flagged)
+                    && f.description.contains("DFIntS2PhysicsSenderRate")
+                    && f.description.contains("= 1")
+            }),
+            "spaced LornoBypass marker plus address cache must provide injector context, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn spaced_lorno_bypass_marker_requires_boundaries() {
+        let b = bytes(r#"preLorno Bypasser address.json {"DFIntS2PhysicsSenderRate":42}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0xD260, &mut table);
+        assert!(
+            !table.tool_markers.contains_key("lorno bypass"),
+            "embedded marker text should not be recorded: {:?}",
+            marker_summary(&table)
+        );
+    }
+
+    #[test]
     fn marker_substrings_are_not_context_markers() {
         // Value 42 keeps the value-match path inactive so this test
         // isolates the substring-rejection assertion.
@@ -4576,6 +4719,193 @@ mod tests {
             0x6bfd_cc53_cb96_e6b8
         );
         assert_eq!(fnv1a64(b"FIntCameraFarZPlane"), 0x94f7_f3f0_4cb3_729a);
+    }
+
+    fn baseline(name: &str) -> &'static RuntimeFlagBaseline {
+        RUNTIME_FLAG_BASELINES
+            .iter()
+            .find(|baseline| baseline.name == name)
+            .expect("baseline exists")
+    }
+
+    enum SyntheticBaselineRead {
+        Missing,
+        NullValuePointer {
+            entry: usize,
+        },
+        UnreadableValue {
+            entry: usize,
+            value_ptr: usize,
+        },
+        Value {
+            entry: usize,
+            value_ptr: usize,
+            raw_value: [u8; 4],
+        },
+    }
+
+    fn inspect_runtime_flag_baselines_synthetic<F>(
+        pid: u32,
+        singletons: &[usize],
+        mut read: F,
+    ) -> Vec<ScanFinding>
+    where
+        F: FnMut(usize, &RuntimeFlagBaseline) -> SyntheticBaselineRead,
+    {
+        let mut findings = Vec::new();
+        for &singleton in singletons {
+            for baseline in RUNTIME_FLAG_BASELINES {
+                match read(singleton, baseline) {
+                    SyntheticBaselineRead::Missing => {}
+                    SyntheticBaselineRead::NullValuePointer { entry } => {
+                        assert_ne!(entry, 0, "test setup should use a real entry");
+                    }
+                    SyntheticBaselineRead::UnreadableValue { entry, value_ptr } => {
+                        assert_ne!(entry, 0, "test setup should use a real entry");
+                        assert_ne!(value_ptr, 0, "test setup should use a real value pointer");
+                    }
+                    SyntheticBaselineRead::Value {
+                        entry,
+                        value_ptr,
+                        raw_value,
+                    } => {
+                        if let Some(finding) = runtime_flag_baseline_finding(
+                            pid, baseline, singleton, entry, value_ptr, raw_value,
+                        ) {
+                            findings.push(finding);
+                        }
+                    }
+                }
+            }
+        }
+        findings
+    }
+
+    #[test]
+    fn runtime_baseline_bool_deviation_flags_debug_draw() {
+        let finding = runtime_flag_baseline_finding(
+            1234,
+            baseline("DFFlagDebugDrawBroadPhaseAABBs"),
+            0x1000,
+            0x2000,
+            0x3000,
+            1i32.to_le_bytes(),
+        )
+        .expect("baseline deviation");
+
+        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
+        assert!(finding
+            .description
+            .contains("DFFlagDebugDrawBroadPhaseAABBs"));
+        assert!(finding.description.contains("= true"));
+        assert!(finding.description.contains("default: false"));
+    }
+
+    #[test]
+    fn runtime_baseline_int_deviation_reports_camera_far_plane() {
+        let finding = runtime_flag_baseline_finding(
+            1234,
+            baseline("FIntCameraFarZPlane"),
+            0x1000,
+            0x2000,
+            0x3000,
+            0i32.to_le_bytes(),
+        )
+        .expect("baseline deviation");
+
+        assert!(matches!(finding.verdict, ScanVerdict::Suspicious));
+        assert!(finding.description.contains("FIntCameraFarZPlane"));
+        assert!(finding.description.contains("= 0"));
+        assert!(finding.description.contains("default: 100000"));
+    }
+
+    #[test]
+    fn runtime_baselines_matching_defaults_emit_no_findings() {
+        let findings = inspect_runtime_flag_baselines_synthetic(1234, &[0x1000], |_, baseline| {
+            let raw_value = match baseline.default_value {
+                RuntimeFlagValue::Bool(false) => 0i32.to_le_bytes(),
+                RuntimeFlagValue::Bool(true) => 1i32.to_le_bytes(),
+                RuntimeFlagValue::Int(value) => value.to_le_bytes(),
+            };
+            SyntheticBaselineRead::Value {
+                entry: 0x2000,
+                value_ptr: 0x3000,
+                raw_value,
+            }
+        });
+
+        assert!(findings.is_empty(), "default values must stay clean");
+    }
+
+    #[test]
+    fn runtime_baseline_missing_registration_emits_no_findings() {
+        let findings = inspect_runtime_flag_baselines_synthetic(1234, &[0x1000], |_, _| {
+            SyntheticBaselineRead::Missing
+        });
+
+        assert!(
+            findings.is_empty(),
+            "unregistered baselined flags should be skipped"
+        );
+    }
+
+    #[test]
+    fn runtime_baseline_null_or_unreadable_value_emits_no_findings() {
+        let mut call = 0usize;
+        let findings = inspect_runtime_flag_baselines_synthetic(1234, &[0x1000], |_, _| {
+            call += 1;
+            if call % 2 == 0 {
+                SyntheticBaselineRead::NullValuePointer { entry: 0x2000 }
+            } else {
+                SyntheticBaselineRead::UnreadableValue {
+                    entry: 0x2000,
+                    value_ptr: 0x3000,
+                }
+            }
+        });
+
+        assert!(
+            findings.is_empty(),
+            "null/unreadable value storage should not emit baseline findings"
+        );
+    }
+
+    #[test]
+    fn runtime_baseline_missing_and_default_cases_are_deterministic() {
+        let findings = inspect_runtime_flag_baselines_synthetic(1234, &[0x1000], |_, baseline| {
+            if baseline.name == "DFFlagDebugDrawBroadPhaseAABBs" {
+                SyntheticBaselineRead::Missing
+            } else {
+                let RuntimeFlagValue::Int(value) = baseline.default_value else {
+                    return SyntheticBaselineRead::Missing;
+                };
+                SyntheticBaselineRead::Value {
+                    entry: 0x2000,
+                    value_ptr: 0x3000,
+                    raw_value: value.to_le_bytes(),
+                }
+            }
+        });
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn runtime_baseline_camera_variation_is_not_flagged() {
+        let finding = runtime_flag_baseline_finding(
+            1234,
+            baseline("FIntCameraFarZPlane"),
+            0x1000,
+            0x2000,
+            0x3000,
+            120_000i32.to_le_bytes(),
+        )
+        .expect("baseline deviation");
+
+        assert!(
+            !matches!(finding.verdict, ScanVerdict::Flagged),
+            "camera far-plane default drift must not become a hard Flagged verdict"
+        );
     }
 
     #[test]

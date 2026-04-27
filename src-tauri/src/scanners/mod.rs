@@ -1,8 +1,8 @@
-pub mod process_scanner;
-pub mod file_scanner;
 pub mod client_settings_scanner;
-pub mod prefetch_scanner;
+pub mod file_scanner;
 pub mod memory_scanner;
+pub mod prefetch_scanner;
+pub mod process_scanner;
 pub mod progress;
 
 use crate::models::ScanFinding;

@@ -22,7 +22,6 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntDataSenderRate",
     // Touch sender bandwidth; -1 = block touch replication
     "DFIntTouchSenderMaxBandwidthBps",
-
     // ---- Simulation radius expansion (network ownership theft) ----
     // Expanding sim radius lets client claim ownership of remote parts
     "DFIntMinClientSimulationRadius",
@@ -32,7 +31,6 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFFlagDebugPhysicsSenderDoesNotShrinkSimRadius",
     // Force custom sim radius
     "FFlagDebugUseCustomSimRadius",
-
     // ---- NextGen Replicator / Aurora desync (invisibility exploit) ----
     // Toggling these breaks character replication on other clients
     "NextGenReplicatorEnabledWrite4",
@@ -46,17 +44,14 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     // Replicator-related network manipulation
     "DFIntReplicatorClusterPacketLimit",
     "DFIntReplicatorWritePacketLimit",
-
     // ---- Replicator animation track limit (animation desync) ----
     // -1 = disable animation replication; others see no movement
     "DFIntReplicatorAnimationTrackLimitPerAnimator",
-
     // ---- Game network PV header manipulation (invisibility) ----
     // High exponent zeros out position/velocity headers
     "DFIntGameNetPVHeaderTranslationZeroCutoffExponent",
     "DFIntGameNetPVHeaderLinearVelocityZeroCutoffExponent",
     "DFIntGameNetPVHeaderRotationalVelocityZeroCutoffExponent",
-
     // ---- Noclip / collision bypass ----
     // Shrinks assembly collision extents; negative = pass through walls
     "DFIntAssemblyExtentsExpansionStudHundredth",
@@ -66,7 +61,6 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "FFlagDebugSimDefaultPrimalSolver",
     "DFIntDebugSimPrimalStiffness",
     "DFIntMaximumFreefallMoveTimeInTenths",
-
     // ---- Physics engine gravity / force manipulation ----
     // Extreme values cause flying, super-jump, moon gravity
     "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
@@ -77,7 +71,6 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntMaximumUnstickForceInGs",
     "DFIntUnstickForceAttackInTenths",
     "DFIntPhysicsDecompForceUpgradeVersion",
-
     // ---- Simulation timestep manipulation ----
     "FFlagSimAdaptiveTimesteppingDefault2",
     "DFFlagSimHumanoidTimestepModelUpdate",
@@ -88,7 +81,6 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntTimestepArbiterVelocityCriteriaThresholdTwoDt",
     "DFIntTimestepArbiterHumanoidTurningVelThreshold",
     "DFIntTimestepArbiterOmegaThou",
-
     // ---- Primal solver gravity / flight exploits ----
     "DFIntDebugSimPrimalLineSearch",
     "DFIntDebugSimPrimalPreconditioner",
@@ -97,48 +89,37 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntDebugSimPrimalWarmstartForce",
     "FFlagDebugSimPrimalGSLump",
     "FIntDebugSimPrimalGSLumpAlpha",
-
     // ---- Bullet / contact threshold manipulation ----
     "DFIntBulletContactBreakOrthogonalThresholdPercent",
     "DFIntBulletContactBreakThresholdPercent",
-
     // ---- Tool desync ----
     "DFIntSimBlockLargeLocalToolWeldManipulationsThreshold",
-
     // ---- Hip height / animation exploits ----
     "DFIntHipHeightClamp",
     "FFlagRemapAnimationR6ToR15Rig",
     "DFFlagAnimatorPostProcessIK",
-
     // ---- Physics throttle bypass ----
     "DFIntPhysicsImprovedCyclicExecutiveThrottleThresholdTenth",
     "DFFlagPhysicsSkipNonRealTimeHumanoidForceCalc2",
-
     // ---- Game network local space manipulation ----
     "DFIntGameNetLocalSpaceMaxSendIndex",
-
     // ---- Parallel dynamics manipulation ----
     // -1 = invisibility through broken cluster batching
     "FIntParallelDynamicPartsFastClusterBatchSize",
-
     // ---- Raycast distance manipulation ----
     // Very low = break hit detection; very high = server-side advantage
     "DFIntRaycastMaxDistance",
-
     // ---- World step / missed step manipulation ----
     "DFIntMaxMissedWorldStepsRemembered",
     "DFIntWorldStepMax",
     "DFIntDebugDefaultTargetWorldStepsPerFrame",
-
     // ---- Data packet / bandwidth manipulation ----
     "DFIntMaxDataPacketPerSend",
     "DFIntServerMaxBandwidth",
     "DFIntAngularVelocityLimit",
-
     // ---- Max active animation tracks (animation freeze) ----
     "DFIntMaxActiveAnimationTracks",
     "FFlagProcessAnimationLooped",
-
     // ---- Interpolation manipulation (desync-adjacent) ----
     "DFIntInterpolationFrameVelocityThresholdMillionth",
     "DFIntInterpolationFrameRotVelocityThresholdMillionth",
@@ -150,25 +131,19 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntCheckPVLinearVelocityIntegrateVsDeltaPositionThresholdPercent",
     "DFIntGameNetDontSendRedundantNumTimes",
     "DFIntGameNetDontSendRedundantDeltaPositionMillionth",
-
     // ---- Replication focus / NOU manipulation ----
     "DFIntReplicationFocusNouExtentsSizeCutoffForPauseStuds",
     "DFIntSimOwnedNOUCountThresholdMillionth",
     "DFIntStreamJobNOUVolumeCap",
     "DFIntStreamJobNOUVolumeLengthCap",
-
     // ---- Max acceptable update delay (desync window) ----
     "DFIntMaxAcceptableUpdateDelay",
-
     // ---- Debug send distance manipulation ----
     "DFIntDebugSendDistInSteps",
-
     // ---- Solver state replication ----
     "DFFlagSolverStateReplicatedOnly2",
-
     // ---- Failsafe humanoid (bypass safety checks) ----
     "FFlagFailsafeHumanoid_3",
-
     // ---- Server connection manipulation ----
     "FFlagDebugLocalRccServerConnection",
     "FFlagRefactorPlayerConnect",
@@ -195,24 +170,20 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FFlagDebugHumanoidRendering",
     // Highlight outlines (can be abused for ESP on mobile)
     "FFlagHighlightOutlinesOnMobile",
-
     // ---- X-ray / fog / see-through ----
     // Far Z plane = 1 creates x-ray camera (see through terrain/parts)
     "FIntCameraFarZPlane",
     // Restrict GC distance = 1 makes most geometry invisible
     "DFIntDebugRestrictGCDistance",
-
     // ---- Camera manipulation (zoom/FOV advantage) ----
     // Extreme zoom distance gives sniper-like view in close-quarters games
     "FIntCameraMaxZoomDistance",
     "FIntMaxCameraMaxZoomDistance",
-
     // ---- Animation LOD manipulation (see players at all distances) ----
     // 0 = animations always render at full detail regardless of distance
     "DFIntAnimationLodFacsDistanceMin",
     "DFIntAnimationLodFacsDistanceMax",
     "DFIntAnimationLodFacsVisibilityDenominator",
-
     // ---- Texture removal / stripping (see through surfaces) ----
     // (DFFlagTextureQualityOverrideEnabled and DFIntTextureQualityOverride
     // are on Roblox's official allowlist — see flag_allowlist.rs — so they
@@ -233,7 +204,6 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FIntTextureCompositorLowResFactor",
     // Terrain slice size manipulation
     "FIntTerrainArraySliceSize",
-
     // ---- Shadow / lighting removal (see in dark areas) ----
     // 0 = no shadows, full visibility in dark areas
     "FIntRenderShadowIntensity",
@@ -244,7 +214,6 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FIntRenderShadowmapBias",
     // CSG voxelizer fade radius; 0 = no baked shadow fade
     "FIntCSGVoxelizerFadeRadius",
-
     // ---- Force lighting technology (reduce visual clutter) ----
     "DFFlagDebugRenderForceTechnologyVoxel",
     "FFlagDebugForceFutureIsBrightPhase2",
@@ -269,27 +238,21 @@ pub static HIGH_FLAGS: &[&str] = &[
     // Dont render screen GUI (hide all UI overlays)
     "FFlagDebugDontRenderScreenGui",
     "FFlagDebugDontRenderUI",
-
     // ---- Roughness manipulation (shiny avatars = easier to spot) ----
     "DFIntRenderClampRoughnessMax",
-
     // ---- Interpolation visualizer (network position debug overlay) ----
     "DFFlagDebugEnableInterpolationVisualizer",
-
     // ---- Debug display overlays ----
     "FFlagDebugDisplayUnthemedInstances",
     "FFlagDebugLightGridShowChunks",
     "FFlagTrackerLodControllerDebugUI",
-
     // ---- Particle / sky / visual stripping ----
     // (FFlagDebugSkyGray and DFFlagDebugPauseVoxelizer are on Roblox's
     // allowlist; removed here to avoid the dead-entry confusion.)
     "FFlagDebugDeterministicParticles",
-
     // ---- SSAO manipulation ----
     "FFlagDebugSSAOForce",
     "FIntSSAOMipLevels",
-
     // ---- Grass stripping beyond allowlist values ----
     // (FIntFRMMinGrassDistance, FIntFRMMaxGrassDistance, and
     // FIntGrassMovementReducedMotionFactor are on Roblox's allowlist —
@@ -297,13 +260,10 @@ pub static HIGH_FLAGS: &[&str] = &[
     // FIntRenderGrassHeightScaler are NOT on the allowlist and stay.)
     "FIntRenderGrassDetailStrands",
     "FIntRenderGrassHeightScaler",
-
     // ---- Viewport manipulation ----
     "FIntViewportFrameMaxSize",
-
     // ---- Refactor mesh materials (strip materials) ----
     "FFlagMSRefactor5",
-
     // ---- Chat / voice chat manipulation for advantage ----
     "FFlagDebugForceChatDisabled",
     "DFIntMaxLoadableAudioChannelCount",
@@ -312,13 +272,10 @@ pub static HIGH_FLAGS: &[&str] = &[
     "DFIntVoiceChatVolumeThousandths",
     "DFIntAvatarFaceChatHeadRollLimitDegrees",
     "FFlagDebugDefaultChannelStartMuted",
-
     // ---- Scroll wheel delta (exploit zoom speed) ----
     "FIntScrollWheelDeltaAmount",
-
     // ---- Remote event size limit manipulation ----
     "DFIntRemoteEventSingleInvocationSizeLimit",
-
     // ---- Disconnect / reconnect manipulation ----
     "DFFlagDebugDisableTimeoutDisconnect",
     // (FFlagReconnectDisabled / FStringReconnectDisabledReason are
@@ -344,7 +301,6 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "DFIntTaskSchedulerTargetFps",
     "FIntTargetRefreshRate",
     "FIntRefreshRateLowerBound",
-
     // ---- Telemetry disabling (hides client modifications) ----
     "FFlagDebugDisableTelemetryEphemeralCounter",
     "FFlagDebugDisableTelemetryEphemeralStat",
@@ -353,7 +309,6 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FFlagDebugDisableTelemetryV2Counter",
     "FFlagDebugDisableTelemetryV2Event",
     "FFlagDebugDisableTelemetryV2Stat",
-
     // (FFlagAdServiceEnabled is a privacy/preference toggle that Bloxstrap
     // ships disabled by default — no competitive-advantage. Moved to
     // MEMORY_BASELINE_FLAGS.)
@@ -372,19 +327,16 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "DFIntServerPhysicsUpdateRate",
     "DFIntServerTickRate",
     "FLogNetwork",
-
     // ---- Graphics quality override ----
     // (DFIntDebugFRMQualityLevelOverride is on Roblox's allowlist —
     // removed. `FFlagCommitToGraphicsQualityFix` and `FFlagFixGraphicsQuality`
     // are "Fix*" bug-fix toggles — shipped true by default — moved to
     // MEMORY_BASELINE_FLAGS.)
     "FIntRomarkStartWithGraphicQualityLevel",
-
     // ---- Light update frequency reduction ----
     "FIntRenderLocalLightUpdatesMax",
     "FIntRenderLocalLightUpdatesMin",
     "FIntRenderLocalLightFadeInMs",
-
     // (FFlagNewLightAttenuation is a Roblox rendering-rollout bool; moved
     // to MEMORY_BASELINE_FLAGS. No meaningful competitive advantage from
     // either state.)
@@ -393,17 +345,14 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // (The four DFIntCSGLevelOfDetailSwitchingDistance* flags are on
     // Roblox's allowlist — removed. CSGv2LodsToGenerate is not.)
     "DFIntCSGv2LodsToGenerate",
-
     // ---- Frame buffer manipulation ----
     "DFIntMaxFrameBufferSize",
-
     // ---- MSAA manipulation ----
     // (FIntDebugForceMSAASamples is allowlisted — removed.)
 
     // ---- Threading manipulation ----
     "FIntRuntimeMaxNumOfThreads",
     "FIntTaskSchedulerThreadMin",
-
     // (Render-threading assertion toggles were engine-internal correctness
     // checks that slowed rendering if anything — moved to MEMORY_BASELINE_FLAGS.)
 
@@ -416,52 +365,40 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // MEMORY_BASELINE_FLAGS. Keep numeric padding/blur knobs only.)
     "FIntFontSizePadding",
     "FIntRobloxGuiBlurIntensity",
-
     // ---- Report abuse menu manipulation ----
     "FStringReportAbuseMenuRoactForcedUserIds",
     "FFlagEnableReportAbuseMenuRoact2",
     "FFlagEnableReportAbuseMenuLayerOnV3",
-
     // (FFlagDebugDisplayFPS is the Shift-F5 built-in overlay — user-facing
     // documented feature, not a cheat — moved to MEMORY_BASELINE_FLAGS.)
 
     // ---- Debug flag state display ----
     "FStringDebugShowFlagState",
-
     // ---- DFIntDebugSimPhysicsSteppingMethodOverride ----
     "DFIntDebugSimPhysicsSteppingMethodOverride",
-
     // ---- Render distance culling ----
     "FFlagRenderTestEnableDistanceCulling",
     "DFFlagDebugSkipMeshVoxelizer",
-
     // ---- Sound physics velocity ----
     "FFlagSoundsUsePhysicalVelocity",
-
     // ---- Shadow atlas manipulation ----
     "FIntRenderMaxShadowAtlasUsageBeforeDownscale",
-
     // ---- Voice chat configuration ----
     "DFIntVoiceChatMaxRecordedDataDeliveryIntervalMs",
-
     // ---- Modernization forced user IDs ----
     "FStringInGameMenuModernizationStickyBarForcedUserIds",
-
     // ---- Order66 (misc debug flag) ----
     "DFFlagOrder66",
-
     // (Quaternion/RigScale animation-system corrections are Roblox-side
     // migration fixes; moved to MEMORY_BASELINE_FLAGS.)
 
     // ---- Avatar chat visualization ----
     "FFlagDebugAvatarChatVisualization",
-
     // (FFlagFastGPULightCulling3 is a staged rendering-perf rollout; moved
     // to MEMORY_BASELINE_FLAGS.)
 
     // ---- Deferred lighting disable ----
     "FFlagDebugDisableDeferredLighting",
-
     // (UIBlox theming and the low-FRM bloom fade are cosmetic Roblox
     // rollouts; moved to MEMORY_BASELINE_FLAGS.)
 
@@ -470,14 +407,12 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FFlagEnableVisBugChecks27",
     "FFlagVisBugChecksThreadYield",
     "FIntEnableVisBugChecksHundredthPercent27",
-
     // (Quick-launch, chat /command autocomplete, and grass render fix are
     // shipped feature gates with no competitive effect; moved to
     // MEMORY_BASELINE_FLAGS.)
 
     // ---- Camera input type manipulation ----
     "FFlagUserCameraControlLastInputTypeUpdate",
-
     // ---- Debug heap dump ----
     "FFlagDebugLuaHeapDump",
 ];
@@ -499,7 +434,6 @@ pub static LOW_FLAGS: &[&str] = &[
     "FFlagDebugGraphicsDisableVulkan",
     "FFlagDebugGraphicsDisableVulkan11",
     "FFlagRenderVulkanFixMinimizeWindow",
-
     // (FFlagHandleAltEnterFullscreenManually and FFlagGrassReducedMotion
     // were previously listed here for "completeness" but are allowlisted /
     // don't exist as real flag names — removed to keep the catalog honest.

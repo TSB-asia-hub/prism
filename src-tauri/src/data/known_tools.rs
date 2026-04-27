@@ -15,6 +15,8 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
     "voidstrap",
     "fflag injector",
     "fflagtoolkit",
+    "lornobypass",
+    "lorno bypass",
     "lornofix",
     "lorno fix",
     // Internal build-target name of LornoFix (see PDB path in binary)
@@ -100,7 +102,10 @@ pub static KNOWN_TOOL_FILENAMES: &[&str] = &[
     "RobloxOffsetDumper.exe",
     "offset_dumper.exe",
     "fflag_injector.exe",
+    "fflag-manager.exe",
+    "LornoBypass.exe",
     "LornoFix.exe",
+    "Lorno Fix.exe",
     "odessa.exe",
 ];
 
@@ -156,18 +161,58 @@ pub static KNOWN_TOOL_HASHES: &[(&str, &str, &str)] = &[
 /// the binary; the combination is a strong signal even without a hash match.
 pub static INJECTOR_SIBLING_CONFIG_FILES: &[&str] = &["fflags.json", "address.json"];
 
+/// A content-based fingerprint for a known tool binary. Scanner reads the
+/// candidate PE bytes and reports a Flagged match iff *every* byte string in
+/// `required_markers` appears somewhere in the file.
+///
+/// This catches binaries that have been renamed (filename match misses) AND
+/// recompiled (SHA-256 match misses), as long as the source-tree string
+/// literals or build paths are preserved — which is the common case for
+/// hobbyist cheat tools that just re-link.
+///
+/// Picking markers: each must be specific enough that an unrelated PE in
+/// Downloads/Desktop is essentially zero risk of containing it. Combine
+/// multiple markers with AND for defense-in-depth.
+pub struct BinaryFingerprint {
+    pub display_name: &'static str,
+    pub note: &'static str,
+    pub required_markers: &'static [&'static [u8]],
+}
+
+/// Content fingerprints for known tools. Strings drawn from the recovered
+/// source tree at `artifacts/lorno-reversed/`; see `meta/call_graph.txt`
+/// for provenance.
+pub static KNOWN_TOOL_BINARY_FINGERPRINTS: &[BinaryFingerprint] = &[
+    BinaryFingerprint {
+        display_name: "LornoFix.exe",
+        note:
+            "LornoBypass FFlag injector — internal log strings match (odessa/fflag-manager source)",
+        required_markers: &[
+            // Three Lorno-specific log strings emitted by find_singleton and
+            // the flag-application loop. All three together are unique to
+            // this codebase.
+            b"found singleton [cached]",
+            b"found singleton [pattern]",
+            b"fflag [{}] has unregistered getset, skipping",
+        ],
+    },
+    BinaryFingerprint {
+        display_name: "LornoFix.exe",
+        note: "LornoBypass FFlag injector — leaked PDB path from MSVC release build",
+        required_markers: &[
+            // The PDB path embedded in the Debug Directory of MSVC release
+            // builds. Survives string-stripping because it's in a header.
+            // Two slightly different substrings to handle path-separator
+            // and trailing-component variation across rebuilds.
+            b"\\fflag-manager\\bld\\release\\bin\\odessa.pdb",
+        ],
+    },
+];
+
 /// Legitimate Roblox launchers — these are NOT cheat tools per Roblox's own
 /// policy (https://devforum.roblox.com/t/3640609). Their presence is recorded
 /// for context but should not raise verdict severity on its own.
-pub static KNOWN_BOOTSTRAPPER_PROCESS_NAMES: &[&str] = &[
-    "bloxstrap",
-    "fishstrap",
-    "appleblox",
-];
+pub static KNOWN_BOOTSTRAPPER_PROCESS_NAMES: &[&str] = &["bloxstrap", "fishstrap", "appleblox"];
 
 /// Directories created by legitimate bootstrappers — informational only.
-pub static KNOWN_BOOTSTRAPPER_DIRS: &[&str] = &[
-    "Bloxstrap",
-    "Fishstrap",
-    "AppleBlox",
-];
+pub static KNOWN_BOOTSTRAPPER_DIRS: &[&str] = &["Bloxstrap", "Fishstrap", "AppleBlox"];

@@ -160,7 +160,10 @@ pub async fn scan() -> Vec<ScanFinding> {
             "process_scanner",
             ScanVerdict::Clean,
             "No known cheat or injection tools detected in running processes",
-            Some(format!("Scanned {} running processes", sys.processes().len())),
+            Some(format!(
+                "Scanned {} running processes",
+                sys.processes().len()
+            )),
         ));
     }
 
@@ -176,8 +179,12 @@ mod tests {
         assert!(contains_token("electron", "electron"));
         assert!(contains_token("Electron Helper", "electron"));
         assert!(contains_token("electron-renderer", "electron"));
+        assert!(contains_token("LornoBypass.exe", "lornobypass"));
+        assert!(contains_token("Lorno Bypass.exe", "lorno bypass"));
         // Must NOT match when the needle is embedded in a longer word.
         assert!(!contains_token("electronics", "electron"));
+        assert!(!contains_token("cleanlornobypasshelper", "lornobypass"));
+        assert!(!contains_token("pre Lorno Bypasser", "lorno bypass"));
         assert!(!contains_token("thunderboltd", "bolt"));
         assert!(!contains_token("wavelink", "wave"));
         assert!(!contains_token("deltachat", "delta"));

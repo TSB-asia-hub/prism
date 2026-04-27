@@ -26,11 +26,13 @@ pub fn generate_report(findings: Vec<ScanFinding>) -> ScanReport {
 pub fn save_report(report: &ScanReport) -> Result<String, String> {
     if !report.verify() {
         return Err(
-            "Report HMAC signature is invalid — refusing to save (signing pipeline bug?).".to_string(),
+            "Report HMAC signature is invalid — refusing to save (signing pipeline bug?)."
+                .to_string(),
         );
     }
 
-    let desktop = get_desktop_path().ok_or_else(|| "Could not determine desktop path".to_string())?;
+    let desktop =
+        get_desktop_path().ok_or_else(|| "Could not determine desktop path".to_string())?;
 
     if !desktop.exists() {
         std::fs::create_dir_all(&desktop)
@@ -42,8 +44,7 @@ pub fn save_report(report: &ScanReport) -> Result<String, String> {
     let file_path = desktop.join(&filename);
 
     let json = report.to_json();
-    std::fs::write(&file_path, &json)
-        .map_err(|e| format!("Could not write report file: {}", e))?;
+    std::fs::write(&file_path, &json).map_err(|e| format!("Could not write report file: {}", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
 }

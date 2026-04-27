@@ -208,9 +208,13 @@ mod tests {
         // samples so a cleanup cannot accidentally re-empty the list.
         assert!(is_memory_baseline_flag("FFlagAdServiceEnabled"));
         assert!(is_memory_baseline_flag("FFlagTopBarUseNewBadge"));
-        assert!(is_memory_baseline_flag("FFlagEnableInGameMenuChromeABTest4"));
+        assert!(is_memory_baseline_flag(
+            "FFlagEnableInGameMenuChromeABTest4"
+        ));
         assert!(is_memory_baseline_flag("FFlagUnifiedLightingBetaFeature"));
-        assert!(is_memory_baseline_flag("FFlagGameBasicSettingsFramerateCap5"));
+        assert!(is_memory_baseline_flag(
+            "FFlagGameBasicSettingsFramerateCap5"
+        ));
         assert!(is_memory_baseline_flag("FLogNetwork"));
         assert!(is_memory_baseline_flag("FFlagRenderFixFog"));
         assert!(is_memory_baseline_flag("FFlagDebugDisplayFPS"));

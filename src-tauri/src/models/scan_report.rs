@@ -87,8 +87,7 @@ impl ScanReport {
     /// and set hmac_signature.
     pub fn sign(&mut self) {
         let content = self.signable_content();
-        let mut mac =
-            HmacSha256::new_from_slice(HMAC_KEY).expect("HMAC can take key of any size");
+        let mut mac = HmacSha256::new_from_slice(HMAC_KEY).expect("HMAC can take key of any size");
         mac.update(content.as_bytes());
         let result = mac.finalize();
         self.hmac_signature = hex::encode(result.into_bytes());
@@ -101,8 +100,7 @@ impl ScanReport {
             return false;
         }
         let content = self.signable_content();
-        let mut mac =
-            HmacSha256::new_from_slice(HMAC_KEY).expect("HMAC can take key of any size");
+        let mut mac = HmacSha256::new_from_slice(HMAC_KEY).expect("HMAC can take key of any size");
         mac.update(content.as_bytes());
 
         match hex::decode(&self.hmac_signature) {
@@ -276,7 +274,11 @@ fn get_os_info() -> String {
     let version = sysinfo::System::os_version().unwrap_or_else(|| "Unknown".to_string());
     let arch = {
         let a = sysinfo::System::cpu_arch();
-        if a.is_empty() { "Unknown".to_string() } else { a }
+        if a.is_empty() {
+            "Unknown".to_string()
+        } else {
+            a
+        }
     };
     format!("{} {} ({})", name, version, arch)
 }

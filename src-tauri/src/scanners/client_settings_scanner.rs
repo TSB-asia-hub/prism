@@ -72,7 +72,11 @@ pub async fn scan() -> Vec<ScanFinding> {
             .iter()
             .any(|f| !matches!(f.verdict, ScanVerdict::Clean));
         let is_clean = !any_non_clean && !parse_failed;
-        let verdict = if is_clean { ScanVerdict::Clean } else { ScanVerdict::Suspicious };
+        let verdict = if is_clean {
+            ScanVerdict::Clean
+        } else {
+            ScanVerdict::Suspicious
+        };
         let msg = if is_clean {
             "ClientAppSettings.json present, contents are within Roblox's official allowlist"
         } else {
@@ -181,9 +185,7 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
         let severity = get_flag_severity(key);
         let category = get_flag_category(key).unwrap_or("UNKNOWN");
         let desc = get_flag_description(key);
-        let detail_suffix = desc
-            .map(|d| format!(" | {}", d))
-            .unwrap_or_default();
+        let detail_suffix = desc.map(|d| format!(" | {}", d)).unwrap_or_default();
 
         match severity {
             ScanVerdict::Flagged => {
@@ -191,7 +193,12 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
                     "client_settings_scanner",
                     ScanVerdict::Flagged,
                     format!("Critical FFlag detected: \"{}\" = {}", key, value),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
             ScanVerdict::Suspicious => {
@@ -199,7 +206,12 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
                     "client_settings_scanner",
                     ScanVerdict::Suspicious,
                     format!("Suspicious FFlag detected: \"{}\" = {}", key, value),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
             ScanVerdict::Clean => {
@@ -215,13 +227,21 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
                         "client_settings_scanner",
                         ScanVerdict::Clean,
                         format!("Low-severity FFlag detected: \"{}\" = {}", key, value),
-                        Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                        Some(format!(
+                            "Path: {} | Category: {}{}",
+                            path.display(),
+                            category,
+                            detail_suffix
+                        )),
                     ));
                 } else {
                     findings.push(ScanFinding::new(
                         "client_settings_scanner",
                         ScanVerdict::Clean,
-                        format!("Unrecognized FFlag-shaped override (not in local DB): \"{}\" = {}", key, value),
+                        format!(
+                            "Unrecognized FFlag-shaped override (not in local DB): \"{}\" = {}",
+                            key, value
+                        ),
                         Some(format!("Path: {}", path.display())),
                     ));
                 }
@@ -235,7 +255,12 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
                     "client_settings_scanner",
                     ScanVerdict::Inconclusive,
                     format!("FFlag requires operator review: \"{}\" = {}", key, value),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
         }
@@ -342,7 +367,11 @@ fn scan_bootstrapper_configs(findings: &mut Vec<ScanFinding>) {
                 .iter()
                 .any(|f| !matches!(f.verdict, ScanVerdict::Clean));
             let is_clean = !any_non_clean;
-            let verdict = if is_clean { ScanVerdict::Clean } else { ScanVerdict::Suspicious };
+            let verdict = if is_clean {
+                ScanVerdict::Clean
+            } else {
+                ScanVerdict::Suspicious
+            };
             let msg = if is_clean {
                 format!(
                     "{} configuration found, contents are within Roblox's allowlist (legitimate launcher)",
@@ -408,9 +437,7 @@ fn check_bootstrapper_flag_array(
         let severity = get_flag_severity(flag_name);
         let category = get_flag_category(flag_name).unwrap_or("UNKNOWN");
         let desc = get_flag_description(flag_name);
-        let detail_suffix = desc
-            .map(|d| format!(" | {}", d))
-            .unwrap_or_default();
+        let detail_suffix = desc.map(|d| format!(" | {}", d)).unwrap_or_default();
 
         match severity {
             ScanVerdict::Flagged => {
@@ -421,7 +448,12 @@ fn check_bootstrapper_flag_array(
                         "{}: Critical FFlag \"{}\" = {}",
                         bootstrapper_name, flag_name, value
                     ),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
             ScanVerdict::Suspicious => {
@@ -432,7 +464,12 @@ fn check_bootstrapper_flag_array(
                         "{}: Suspicious FFlag \"{}\" = {}",
                         bootstrapper_name, flag_name, value
                     ),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
             ScanVerdict::Clean => {
@@ -449,7 +486,12 @@ fn check_bootstrapper_flag_array(
                             "{}: Low-severity FFlag \"{}\" = {}",
                             bootstrapper_name, flag_name, value
                         ),
-                        Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                        Some(format!(
+                            "Path: {} | Category: {}{}",
+                            path.display(),
+                            category,
+                            detail_suffix
+                        )),
                     ));
                 } else {
                     findings.push(ScanFinding::new(
@@ -471,7 +513,12 @@ fn check_bootstrapper_flag_array(
                         "{}: FFlag requires operator review \"{}\" = {}",
                         bootstrapper_name, flag_name, value
                     ),
-                    Some(format!("Path: {} | Category: {}{}", path.display(), category, detail_suffix)),
+                    Some(format!(
+                        "Path: {} | Category: {}{}",
+                        path.display(),
+                        category,
+                        detail_suffix
+                    )),
                 ));
             }
         }
@@ -633,9 +680,7 @@ fn get_bootstrapper_config_paths() -> Vec<(&'static str, Vec<PathBuf>)> {
                 .join("AppleBlox");
 
             if appleblox_dir.exists() {
-                let mut appleblox_paths = vec![
-                    appleblox_dir.join("config").join("fastflags.json"),
-                ];
+                let mut appleblox_paths = vec![appleblox_dir.join("config").join("fastflags.json")];
 
                 // Also check all profile files
                 let profiles_dir = appleblox_dir.join("config").join("profiles");
@@ -699,7 +744,6 @@ fn get_bootstrapper_config_paths() -> Vec<(&'static str, Vec<PathBuf>)> {
     configs
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,8 +766,7 @@ mod tests {
     fn allowlisted_only_file_is_clean() {
         // A file containing nothing but Roblox's officially-allowlisted
         // flags must not produce any Suspicious or Flagged findings.
-        let json =
-            r#"{"FFlagDebugGraphicsPreferD3D11": true, "FIntDebugForceMSAASamples": 4}"#;
+        let json = r#"{"FFlagDebugGraphicsPreferD3D11": true, "FIntDebugForceMSAASamples": 4}"#;
         let dir = tmpdir();
         let path = dir.join("ClientAppSettings.json");
         std::fs::write(&path, json).unwrap();
@@ -751,8 +794,14 @@ mod tests {
         let mut findings = Vec::new();
         check_flat_json_flags(json, &path, &mut findings);
 
-        let any_flagged = findings.iter().any(|f| matches!(f.verdict, ScanVerdict::Flagged));
-        assert!(any_flagged, "DFIntS2PhysicsSenderRate must produce a Flagged verdict; got: {:?}", findings);
+        let any_flagged = findings
+            .iter()
+            .any(|f| matches!(f.verdict, ScanVerdict::Flagged));
+        assert!(
+            any_flagged,
+            "DFIntS2PhysicsSenderRate must produce a Flagged verdict; got: {:?}",
+            findings
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

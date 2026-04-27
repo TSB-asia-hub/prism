@@ -7,8 +7,9 @@ use sha2::{Digest, Sha256};
 
 use crate::data::flag_allowlist::is_allowed_flag;
 use crate::data::known_tools::{
-    GENERIC_RE_TOOL_DIRS, INJECTOR_SIBLING_CONFIG_FILES, KNOWN_BOOTSTRAPPER_DIRS,
-    KNOWN_TOOL_FILENAMES, KNOWN_TOOL_HASHES, ROBLOX_CHEAT_DIRS,
+    BinaryFingerprint, GENERIC_RE_TOOL_DIRS, INJECTOR_SIBLING_CONFIG_FILES,
+    KNOWN_BOOTSTRAPPER_DIRS, KNOWN_TOOL_BINARY_FINGERPRINTS, KNOWN_TOOL_FILENAMES,
+    KNOWN_TOOL_HASHES, ROBLOX_CHEAT_DIRS,
 };
 use crate::data::suspicious_flags::{get_flag_category, get_flag_description, get_flag_severity};
 use crate::models::{ScanFinding, ScanVerdict};
@@ -194,6 +195,49 @@ pub async fn scan() -> Vec<ScanFinding> {
                 continue;
             }
 
+            // Content-fingerprint match: catches renamed/recompiled tool
+            // binaries. Run only on PE candidates we already size-clamped
+            // for hashing — same I/O budget, same size guard. Flagged
+            // verdict (not Suspicious) because the fingerprints are unique
+            // log strings / leaked PDB paths that have no legitimate use.
+            let mut matched_by_fingerprint = false;
+            if ext_is_candidate && file_ext.as_deref() == Some("exe") {
+                let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(u64::MAX);
+                if size <= HASH_SIZE_LIMIT_BYTES && file_starts_with_mz(entry.path()) {
+                    if let Some(fp) = pe_content_fingerprint(entry.path()) {
+                        let canon = entry
+                            .path()
+                            .canonicalize()
+                            .unwrap_or_else(|_| entry.path().to_path_buf());
+                        if reported_paths.insert(canon.clone()) {
+                            let payload_detail = injector_payload_detail(entry.path());
+                            findings.push(ScanFinding::new(
+                                "file_scanner",
+                                ScanVerdict::Flagged,
+                                format!(
+                                    "Known tool binary matched by content fingerprint: \"{}\" (as \"{}\")",
+                                    fp.display_name, file_name
+                                ),
+                                Some(format!(
+                                    "Path: {}, Last modified: {}, Note: {}{}",
+                                    entry.path().display(),
+                                    format_modified(entry.path()),
+                                    fp.note,
+                                    payload_detail
+                                        .as_deref()
+                                        .map(|d| format!(" | {}", d))
+                                        .unwrap_or_default()
+                                )),
+                            ));
+                        }
+                        matched_by_fingerprint = true;
+                    }
+                }
+            }
+            if matched_by_fingerprint {
+                continue;
+            }
+
             // Name-based match.
             let mut matched_by_name = false;
             for &known_file in KNOWN_TOOL_FILENAMES {
@@ -331,6 +375,83 @@ fn hash_file_sha256(path: &Path) -> Option<String> {
         }
     }
     Some(hex::encode(hasher.finalize()))
+}
+
+/// Scan a PE file for known-tool binary fingerprints. Returns the first
+/// fingerprint whose markers are *all* found inside the file, or None.
+///
+/// Streams the file in 64 KiB chunks with an overlap region equal to the
+/// longest marker - 1 bytes, so a marker that straddles a chunk boundary is
+/// still found. Bails on any I/O error (no panic, no partial result).
+fn pe_content_fingerprint(path: &Path) -> Option<&'static BinaryFingerprint> {
+    let mut file = std::fs::File::open(path).ok()?;
+
+    // Per-fingerprint per-marker hit tracking. Indexed [fp][marker].
+    let mut hits: Vec<Vec<bool>> = KNOWN_TOOL_BINARY_FINGERPRINTS
+        .iter()
+        .map(|fp| vec![false; fp.required_markers.len()])
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+
+    // Overlap = longest marker minus 1, so a marker spanning two reads is
+    // still wholly inside the (overlap || chunk) buffer on the second read.
+    let max_marker_len = KNOWN_TOOL_BINARY_FINGERPRINTS
+        .iter()
+        .flat_map(|fp| fp.required_markers.iter())
+        .map(|m| m.len())
+        .max()
+        .unwrap_or(0);
+    if max_marker_len == 0 {
+        return None;
+    }
+    let overlap = max_marker_len.saturating_sub(1);
+
+    const CHUNK: usize = 64 * 1024;
+    let mut buf = vec![0u8; overlap + CHUNK];
+    let mut filled_tail = 0usize; // bytes carried over from the previous read
+
+    loop {
+        let n = match file.read(&mut buf[filled_tail..]) {
+            Ok(0) => 0,
+            Ok(n) => n,
+            Err(_) => return None,
+        };
+        let valid = filled_tail + n;
+        if valid == 0 {
+            break;
+        }
+        let haystack = &buf[..valid];
+
+        for (fi, fp) in KNOWN_TOOL_BINARY_FINGERPRINTS.iter().enumerate() {
+            for (mi, marker) in fp.required_markers.iter().enumerate() {
+                if hits[fi][mi] {
+                    continue;
+                }
+                if memchr::memmem::find(haystack, marker).is_some() {
+                    hits[fi][mi] = true;
+                }
+            }
+            if hits[fi].iter().all(|&h| h) {
+                return Some(fp);
+            }
+        }
+
+        // EOF reached: no more chunks to read.
+        if n == 0 {
+            break;
+        }
+
+        // Carry the last `overlap` bytes forward so a marker spanning two
+        // chunks is still found wholly within the next iteration's haystack.
+        let carry = overlap.min(valid);
+        let carry_start = valid - carry;
+        buf.copy_within(carry_start..valid, 0);
+        filled_tail = carry;
+    }
+
+    None
 }
 
 /// True if the file at `path` starts with the PE / Mach-O magic bytes that a
@@ -956,5 +1077,159 @@ mod tests {
         assert!(json_flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Helper: build a temp dir and a synthetic PE file containing the given
+    /// markers padded with random PE-looking filler. Returns the file path
+    /// and the temp dir (caller cleans up).
+    fn make_synthetic_pe(tag: &str, markers: &[&[u8]]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "fflag_check_fp_test_{}_{}",
+            std::process::id(),
+            tag
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blob.exe");
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(2048);
+        bytes.extend_from_slice(b"MZ\x90\x00");
+        bytes.resize(512, 0);
+        for m in markers {
+            bytes.resize(bytes.len() + 1024, 0xAB);
+            bytes.extend_from_slice(m);
+        }
+        bytes.resize(bytes.len() + 1024, 0xCD);
+
+        std::fs::write(&path, &bytes).unwrap();
+        (path, dir)
+    }
+
+    #[test]
+    fn fingerprint_matches_full_lorno_marker_set() {
+        let lorno_markers: &[&[u8]] = &[
+            b"found singleton [cached]",
+            b"found singleton [pattern]",
+            b"fflag [{}] has unregistered getset, skipping",
+        ];
+        let (path, dir) = make_synthetic_pe("full", lorno_markers);
+
+        let m = pe_content_fingerprint(&path);
+        assert!(
+            m.is_some(),
+            "expected fingerprint hit on synthetic Lorno PE"
+        );
+        assert_eq!(m.unwrap().display_name, "LornoFix.exe");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fingerprint_matches_pdb_path_alone() {
+        let markers: &[&[u8]] = &[b"\\fflag-manager\\bld\\release\\bin\\odessa.pdb"];
+        let (path, dir) = make_synthetic_pe("pdb", markers);
+
+        let m = pe_content_fingerprint(&path);
+        assert!(m.is_some(), "PDB-path fingerprint should match");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Negative test: a PE that contains exactly one of the Lorno log strings
+    /// must NOT match. The full marker set is required.
+    #[test]
+    fn fingerprint_rejects_partial_marker_overlap() {
+        let partial: &[&[u8]] = &[b"found singleton [cached]"];
+        let (path, dir) = make_synthetic_pe("partial", partial);
+        let m = pe_content_fingerprint(&path);
+        assert!(
+            m.is_none(),
+            "partial marker presence must not be enough — got {:?}",
+            m.map(|fp| fp.display_name)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Negative test: an unrelated PE with the word "singleton" present in a
+    /// non-cheat context must not match.
+    #[test]
+    fn fingerprint_rejects_random_pe() {
+        let dir =
+            std::env::temp_dir().join(format!("fflag_check_fp_neg_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("benign.exe");
+        let mut bytes: Vec<u8> = Vec::with_capacity(8 * 1024);
+        bytes.extend_from_slice(b"MZ\x90\x00");
+        bytes.resize(8 * 1024, 0x42);
+        bytes.extend_from_slice(b"this binary uses the singleton pattern");
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert!(pe_content_fingerprint(&path).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Markers that straddle the 64 KiB chunk boundary must still be found.
+    #[test]
+    fn fingerprint_finds_marker_across_chunk_boundary() {
+        let dir = std::env::temp_dir().join(format!(
+            "fflag_check_fp_boundary_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("split.exe");
+
+        const CHUNK: usize = 64 * 1024;
+        let lorno_markers: &[&[u8]] = &[
+            b"found singleton [cached]",
+            b"found singleton [pattern]",
+            b"fflag [{}] has unregistered getset, skipping",
+        ];
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(4 * CHUNK);
+        bytes.extend_from_slice(b"MZ\x90\x00");
+        for (i, m) in lorno_markers.iter().enumerate() {
+            let target_boundary = (i + 1) * CHUNK;
+            let split_point = target_boundary - m.len() / 2;
+            if bytes.len() < split_point {
+                bytes.resize(split_point, 0xEE);
+            }
+            bytes.extend_from_slice(m);
+        }
+        std::fs::write(&path, &bytes).unwrap();
+
+        let m = pe_content_fingerprint(&path);
+        assert!(m.is_some(), "boundary-spanning markers should still match");
+        assert_eq!(m.unwrap().display_name, "LornoFix.exe");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fingerprint_returns_none_on_missing_file() {
+        let path = std::env::temp_dir().join("fflag_check_does_not_exist.exe");
+        assert!(pe_content_fingerprint(&path).is_none());
+    }
+
+    #[test]
+    fn binary_fingerprints_are_well_formed() {
+        for fp in KNOWN_TOOL_BINARY_FINGERPRINTS {
+            assert!(
+                !fp.required_markers.is_empty(),
+                "fingerprint for {} has no markers",
+                fp.display_name
+            );
+            for m in fp.required_markers {
+                assert!(
+                    !m.is_empty(),
+                    "fingerprint for {} has empty marker",
+                    fp.display_name
+                );
+                assert!(
+                    m.len() >= 8,
+                    "fingerprint marker for {} too short ({} bytes) — risk of false positives",
+                    fp.display_name,
+                    m.len()
+                );
+            }
+        }
     }
 }
