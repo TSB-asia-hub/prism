@@ -174,10 +174,6 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: npm run tauri -- build --no-bundle --target ${{ matrix.target }}
 
-      - name: Windows memory evidence exporter build
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo build --release --manifest-path src-tauri/tools/memory_evidence_exporter/Cargo.toml --target ${{ matrix.target }}
-
       - name: Sign Windows portable executable
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: powershell
@@ -191,11 +187,7 @@ jobs:
 
           $targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
           $mainExe = Join-Path $targetRoot "$env:TARGET\release\fflag-check.exe"
-          $exporterExe = Join-Path $targetRoot "$env:TARGET\release\memory_evidence_exporter.exe"
-          $binaries = @($mainExe, $exporterExe)
-          foreach ($binary in $binaries) {
-            if (!(Test-Path $binary)) { throw "Build output not found: $binary" }
-          }
+          if (!(Test-Path $mainExe)) { throw "Build output not found: $mainExe" }
 
           $programFilesX86 = [Environment]::GetFolderPath('ProgramFilesX86')
           $kitsRoot = Join-Path $programFilesX86 'Windows Kits\10\bin'
@@ -207,10 +199,8 @@ jobs:
             throw 'signtool.exe was not found under the Windows Kits installation.'
           }
 
-          foreach ($binary in $binaries) {
-            & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $binary
-            & $signtool.FullName verify /pa /v $binary
-          }
+          & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $mainExe
+          & $signtool.FullName verify /pa /v $mainExe
 
       - name: macOS bundle build (.app + .dmg)
         if: startsWith(matrix.os, 'macos')
@@ -232,11 +222,6 @@ jobs:
           if (!(Test-Path $src)) { throw "Build output not found: $src" }
           $dest = Join-Path $assetDir "TSBCC-FFlag-Scanner-$env:TAG-$env:ASSET_SUFFIX"
           Copy-Item $src $dest
-
-          $exporterSrc = Join-Path $targetRoot "$env:TARGET\release\memory_evidence_exporter.exe"
-          if (!(Test-Path $exporterSrc)) { throw "Build output not found: $exporterSrc" }
-          $exporterDest = Join-Path $assetDir "TSBCC-FFlag-Scanner-$env:TAG-windows-memory-evidence-exporter.exe"
-          Copy-Item $exporterSrc $exporterDest
 
           "asset_path=$assetDir/*" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "artifact_name=TSBCC-FFlag-Scanner-$env:TAG-windows-assets" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
