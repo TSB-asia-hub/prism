@@ -1,6 +1,6 @@
 mod commands;
-mod data;
-mod models;
+pub mod data;
+pub mod models;
 mod reports;
 mod scanners;
 mod util;

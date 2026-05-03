@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "fflag-check"
-version = "0.6.12"
+version = "0.6.13"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -2024,6 +2024,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "memory-evidence-exporter"
+version = "0.6.13"
+dependencies = [
+ "chrono",
+ "fflag-check",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -4,6 +4,9 @@
 )]
 
 use chrono::Utc;
+use fflag_check_lib::data::suspicious_flags::{
+    CRITICAL_FLAGS, HIGH_FLAGS, LOW_FLAGS, MEDIUM_FLAGS,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -44,9 +47,7 @@ const TOOL_MARKERS: &[&str] = &[
     "odessa",
     "robloxoffsetdumper",
     "offset_dumper",
-    "writeprocessmemory",
 ];
-const SUSPICIOUS_FLAGS_SOURCE: &str = include_str!("../data/suspicious_flags.rs");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExpectedValue {
@@ -863,11 +864,7 @@ fn finalize_match_order(matches: &mut [EvidenceMatch]) {
 
 fn evidence_priority(raw: &RawMatch, parsed_value: Option<&str>) -> (u8, String) {
     if raw.kind == "tool_marker" {
-        return if high_value_tool_marker(&raw.name) {
-            (100, "exact high-value tool/config marker".to_string())
-        } else {
-            (25, "diagnostic API/tool marker".to_string())
-        };
+        return (100, "exact high-value tool/config marker".to_string());
     }
 
     if let Some(value) = parsed_value {
@@ -889,10 +886,6 @@ fn evidence_priority(raw: &RawMatch, parsed_value: Option<&str>) -> (u8, String)
     (10, "generic flag-like identifier".to_string())
 }
 
-fn high_value_tool_marker(name: &str) -> bool {
-    !matches!(name, "writeprocessmemory")
-}
-
 fn is_runtime_rule_name(name: &str) -> bool {
     RUNTIME_RULES
         .iter()
@@ -900,7 +893,9 @@ fn is_runtime_rule_name(name: &str) -> bool {
 }
 
 fn is_curated_name(name: &str) -> bool {
-    SUSPICIOUS_FLAGS_SOURCE.contains(&format!("\"{name}\""))
+    [CRITICAL_FLAGS, HIGH_FLAGS, MEDIUM_FLAGS, LOW_FLAGS]
+        .iter()
+        .any(|flags| flags.iter().any(|flag| *flag == name))
 }
 
 fn runtime_rule_value_matches(name: &str, value: &str) -> bool {

@@ -118,7 +118,7 @@ src-tauri/target/release/bundle/msi/TSBCC FFlag Scanner_<version>_x64.msi
 src-tauri/target/release/bundle/nsis/TSBCC FFlag Scanner_<version>_x64-setup.exe
 ```
 
-CI publishes a portable Windows `.exe` (no installer) plus macOS Intel and Apple Silicon `.dmg`s on every `v*` tag.
+CI publishes a portable Windows scanner `.exe` (no installer), a separate Windows memory evidence exporter `.exe` for diagnostics, plus macOS Intel and Apple Silicon `.dmg`s on every `v*` tag.
 
 ---
 

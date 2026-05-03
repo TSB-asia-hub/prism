@@ -1,10 +1,12 @@
 # Rust
 src-tauri/target/
+src-tauri/tools/*/target/
 
 # Node
 node_modules/
 dist/
 dist-tsconfig-node/
+artifacts/
 
 # TypeScript build info
 *.tsbuildinfo
