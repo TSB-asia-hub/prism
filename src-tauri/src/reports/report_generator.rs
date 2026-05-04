@@ -39,8 +39,8 @@ pub fn save_report(report: &ScanReport, target_path: Option<&str>) -> Result<Str
     let file_path: PathBuf = match target_path {
         Some(p) if !p.is_empty() => PathBuf::from(p),
         _ => {
-            let desktop = get_desktop_path()
-                .ok_or_else(|| "Could not determine desktop path".to_string())?;
+            let desktop =
+                get_desktop_path().ok_or_else(|| "Could not determine desktop path".to_string())?;
             if !desktop.exists() {
                 std::fs::create_dir_all(&desktop)
                     .map_err(|e| format!("Could not create desktop directory: {}", e))?;
