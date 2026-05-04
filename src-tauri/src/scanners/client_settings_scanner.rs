@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use crate::data::flag_allowlist::is_allowed_flag;
+#[cfg(target_os = "windows")]
+use crate::data::known_tools::WINDOWS_BOOTSTRAPPER_CONFIG_DIRS;
 use crate::data::suspicious_flags::{get_flag_category, get_flag_description, get_flag_severity};
 use crate::models::{ScanFinding, ScanVerdict};
 
@@ -268,7 +270,7 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
 }
 
 /// Scan bootstrapper configuration files for FFlag settings.
-/// Supports: AppleBlox (macOS), Bloxstrap (Windows), Fishstrap, Voidstrap.
+/// Supports: AppleBlox (macOS) and Bloxstrap-family Windows launchers.
 fn scan_bootstrapper_configs(findings: &mut Vec<ScanFinding>) {
     let configs = get_bootstrapper_config_paths();
 
@@ -704,36 +706,15 @@ fn get_bootstrapper_config_paths() -> Vec<(&'static str, Vec<PathBuf>)> {
     {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             let lad = PathBuf::from(&local_app_data);
+            add_windows_bootstrapper_configs(&mut configs, &lad);
+        }
 
-            // Bloxstrap
-            let bloxstrap_flags = lad
-                .join("Bloxstrap")
-                .join("Modifications")
-                .join("ClientSettings")
-                .join("ClientAppSettings.json");
-            if bloxstrap_flags.exists() {
-                configs.push(("Bloxstrap", vec![bloxstrap_flags]));
-            }
-
-            // Voidstrap
-            let voidstrap_flags = lad
-                .join("Voidstrap")
-                .join("Modifications")
-                .join("ClientSettings")
-                .join("ClientAppSettings.json");
-            if voidstrap_flags.exists() {
-                configs.push(("Voidstrap", vec![voidstrap_flags]));
-            }
-
-            // Fishstrap
-            let fishstrap_flags = lad
-                .join("Fishstrap")
-                .join("Modifications")
-                .join("ClientSettings")
-                .join("ClientAppSettings.json");
-            if fishstrap_flags.exists() {
-                configs.push(("Fishstrap", vec![fishstrap_flags]));
-            }
+        // Luczystrap documents installed config under APPDATA, while most
+        // Bloxstrap-derived launchers use LOCALAPPDATA. Check both exact
+        // roots; duplicate paths are harmlessly filtered by existence.
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let roaming = PathBuf::from(&appdata);
+            add_windows_bootstrapper_configs(&mut configs, &roaming);
         }
 
         // FFlagToolkit was previously routed here and got the "legitimate
@@ -742,6 +723,51 @@ fn get_bootstrapper_config_paths() -> Vec<(&'static str, Vec<PathBuf>)> {
     }
 
     configs
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_bootstrapper_configs(
+    configs: &mut Vec<(&'static str, Vec<PathBuf>)>,
+    app_root: &std::path::Path,
+) {
+    for &(name, dir_name) in WINDOWS_BOOTSTRAPPER_CONFIG_DIRS {
+        let base = app_root.join(dir_name);
+        let paths = windows_bootstrapper_client_settings_candidates(&base)
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            configs.push((name, paths));
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_bootstrapper_client_settings_candidates(base: &std::path::Path) -> Vec<PathBuf> {
+    vec![
+        base.join("Modifications")
+            .join("ClientSettings")
+            .join("ClientAppSettings.json"),
+        // Froststrap keeps preset mods separately; private forks commonly copy
+        // this layout.
+        base.join("Modifications")
+            .join("Preset Modifications")
+            .join("ClientSettings")
+            .join("ClientAppSettings.json"),
+        base.join("Preset Modifications")
+            .join("ClientSettings")
+            .join("ClientAppSettings.json"),
+        // Voidstrap renamed the mod folder in its public source.
+        base.join("VoidstrapMods")
+            .join("ClientSettings")
+            .join("ClientAppSettings.json"),
+        // Portable/fresh rewrites sometimes keep user data/config below a
+        // project-local folder rather than directly under LOCALAPPDATA.
+        base.join("UserData")
+            .join("ClientSettings")
+            .join("ClientAppSettings.json"),
+        base.join("ClientSettings").join("ClientAppSettings.json"),
+    ]
 }
 
 #[cfg(test)]
@@ -867,5 +893,37 @@ mod tests {
             findings
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn windows_bootstrapper_candidates_cover_clone_layouts_without_broad_paths() {
+        let base = PathBuf::from(r"C:\Users\player\AppData\Local\Homiestrap");
+        let candidates = windows_bootstrapper_client_settings_candidates(&base);
+        let rendered = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|p| p
+                    .ends_with("Homiestrap/Modifications/ClientSettings/ClientAppSettings.json"))
+        );
+        assert!(rendered.iter().any(|p| {
+            p.ends_with(
+                "Homiestrap/Modifications/Preset Modifications/ClientSettings/ClientAppSettings.json",
+            )
+        }));
+        assert!(
+            rendered
+                .iter()
+                .any(|p| p
+                    .ends_with("Homiestrap/VoidstrapMods/ClientSettings/ClientAppSettings.json"))
+        );
+        assert!(rendered
+            .iter()
+            .any(|p| p.ends_with("Homiestrap/UserData/ClientSettings/ClientAppSettings.json")));
+        assert!(!rendered.iter().any(|p| p.ends_with("Homiestrap/Downloads")));
     }
 }

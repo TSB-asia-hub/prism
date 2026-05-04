@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::data::flag_allowlist::is_allowed_flag;
 use crate::data::known_tools::{
     BinaryFingerprint, GENERIC_RE_TOOL_DIRS, INJECTOR_SIBLING_CONFIG_FILES,
-    KNOWN_BOOTSTRAPPER_DIRS, KNOWN_TOOL_BINARY_FINGERPRINTS, KNOWN_TOOL_FILENAMES,
-    KNOWN_TOOL_HASHES, ROBLOX_CHEAT_DIRS,
+    KNOWN_BOOTSTRAPPER_DIRS, KNOWN_BOOTSTRAPPER_FILENAMES, KNOWN_TOOL_BINARY_FINGERPRINTS,
+    KNOWN_TOOL_FILENAMES, KNOWN_TOOL_HASHES, ROBLOX_CHEAT_DIRS,
 };
 use crate::data::suspicious_flags::{get_flag_category, get_flag_description, get_flag_severity};
 use crate::models::{ScanFinding, ScanVerdict};
@@ -47,8 +47,7 @@ pub async fn scan() -> Vec<ScanFinding> {
 
         // Roblox-specific cheat tool directories → Suspicious.
         for &tool_dir in ROBLOX_CHEAT_DIRS {
-            let dir_path = root.join(tool_dir);
-            if dir_path.exists() && dir_path.is_dir() {
+            if let Some(dir_path) = known_named_dir_path(root, tool_dir) {
                 let canon = dir_path.canonicalize().unwrap_or_else(|_| dir_path.clone());
                 if reported_paths.insert(canon.clone()) {
                     let modified = format_modified(&dir_path);
@@ -71,8 +70,7 @@ pub async fn scan() -> Vec<ScanFinding> {
         // driver debugging, and security research. Record as informational
         // Clean notes only; do not raise the verdict.
         for &tool_dir in GENERIC_RE_TOOL_DIRS {
-            let dir_path = root.join(tool_dir);
-            if dir_path.exists() && dir_path.is_dir() {
+            if let Some(dir_path) = known_named_dir_path(root, tool_dir) {
                 let canon = dir_path.canonicalize().unwrap_or_else(|_| dir_path.clone());
                 if reported_paths.insert(canon.clone()) {
                     let modified = format_modified(&dir_path);
@@ -96,8 +94,7 @@ pub async fn scan() -> Vec<ScanFinding> {
         // Bootstrapper directories — informational only (legitimate launchers
         // per Roblox policy, not cheat indicators).
         for &boot_dir in KNOWN_BOOTSTRAPPER_DIRS {
-            let dir_path = root.join(boot_dir);
-            if dir_path.exists() && dir_path.is_dir() {
+            if let Some(dir_path) = known_named_dir_path(root, boot_dir) {
                 let canon = dir_path.canonicalize().unwrap_or_else(|_| dir_path.clone());
                 if reported_paths.insert(canon.clone()) {
                     findings.push(ScanFinding::new(
@@ -273,6 +270,41 @@ pub async fn scan() -> Vec<ScanFinding> {
             }
             if matched_by_name {
                 continue;
+            }
+
+            // Bootstrapper executable/installer artefacts — informational
+            // only. This catches portable/off-GitHub builds such as a
+            // standalone Homiestrap.exe without treating them as cheats.
+            if file_ext.as_deref() == Some("exe") {
+                let mut matched_bootstrapper = false;
+                for &known_file in KNOWN_BOOTSTRAPPER_FILENAMES {
+                    if file_name.eq_ignore_ascii_case(known_file) {
+                        let canon = entry
+                            .path()
+                            .canonicalize()
+                            .unwrap_or_else(|_| entry.path().to_path_buf());
+                        if reported_paths.insert(canon.clone()) {
+                            findings.push(ScanFinding::new(
+                                "file_scanner",
+                                ScanVerdict::Clean,
+                                format!(
+                                    "Bootstrapper executable present: \"{}\" (legitimate launcher family; not a cheat indicator)",
+                                    file_name
+                                ),
+                                Some(format!(
+                                    "Path: {}, Last modified: {}",
+                                    entry.path().display(),
+                                    format_modified(entry.path())
+                                )),
+                            ));
+                        }
+                        matched_bootstrapper = true;
+                        break;
+                    }
+                }
+                if matched_bootstrapper {
+                    continue;
+                }
             }
 
             // Sibling-config heuristic: PE with fflags.json + address.json next
@@ -855,6 +887,32 @@ fn format_modified(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn path_file_name_eq(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+}
+
+fn known_named_dir_path(root: &Path, dir_name: &str) -> Option<PathBuf> {
+    if path_file_name_eq(root, dir_name) && root.is_dir() {
+        return Some(root.to_path_buf());
+    }
+
+    let child = root.join(dir_name);
+    if child.is_dir() {
+        return Some(child);
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|p| same_path_for_scan_exclusion(p, &path)) {
+        paths.push(path);
+    }
+}
+
 /// Get the list of root directories to scan. Each root is walked at most
 /// once; we deliberately do NOT include LOCALAPPDATA / APPDATA / USERPROFILE
 /// as scan roots in addition to their known subdirectories — that produced
@@ -866,12 +924,25 @@ fn get_search_roots() -> Vec<PathBuf> {
     {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             let lad = PathBuf::from(&local_app_data);
-            roots.push(lad.join("Voidstrap"));
-            roots.push(lad.join("Bloxstrap"));
-            roots.push(lad.join("Fishstrap"));
+            for &dir in ROBLOX_CHEAT_DIRS {
+                push_unique_path(&mut roots, lad.join(dir));
+            }
+            for &dir in KNOWN_BOOTSTRAPPER_DIRS {
+                push_unique_path(&mut roots, lad.join(dir));
+            }
+            for &dir in GENERIC_RE_TOOL_DIRS {
+                push_unique_path(&mut roots, lad.join(dir));
+            }
         }
         if let Ok(appdata) = std::env::var("APPDATA") {
-            roots.push(PathBuf::from(&appdata).join("FFlagToolkit"));
+            let roaming = PathBuf::from(&appdata);
+            push_unique_path(&mut roots, roaming.join("FFlagToolkit"));
+            // Luczystrap documents its installed config under APPDATA; exact
+            // known bootstrapper roots are cheap to include and avoid walking
+            // the whole roaming profile.
+            for &dir in KNOWN_BOOTSTRAPPER_DIRS {
+                push_unique_path(&mut roots, roaming.join(dir));
+            }
         }
         if let Ok(userprofile) = std::env::var("USERPROFILE") {
             let up = PathBuf::from(&userprofile);
@@ -937,6 +1008,42 @@ mod tests {
     fn lower_ext_normalises_case() {
         assert_eq!(lower_ext(Path::new("x/Y/Foo.EXE")).as_deref(), Some("exe"));
         assert_eq!(lower_ext(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn bootstrapper_filename_fingerprints_are_exact_names() {
+        assert!(KNOWN_BOOTSTRAPPER_FILENAMES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("Homiestrap.exe")));
+        assert!(KNOWN_BOOTSTRAPPER_FILENAMES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("Froststrap.exe")));
+        assert!(!KNOWN_BOOTSTRAPPER_FILENAMES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("strap.exe")));
+    }
+
+    #[test]
+    fn known_named_dir_matches_self_or_direct_child_only() {
+        let root =
+            std::env::temp_dir().join(format!("fflag_check_known_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let homiestrap = root.join("Homiestrap");
+        std::fs::create_dir_all(&homiestrap).unwrap();
+        let unrelated = root.join("Velcro Strap Organizer");
+        std::fs::create_dir_all(&unrelated).unwrap();
+
+        assert_eq!(
+            known_named_dir_path(&root, "Homiestrap").as_deref(),
+            Some(homiestrap.as_path())
+        );
+        assert_eq!(
+            known_named_dir_path(&homiestrap, "Homiestrap").as_deref(),
+            Some(homiestrap.as_path())
+        );
+        assert!(known_named_dir_path(&root, "VeloStrap").is_none());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
