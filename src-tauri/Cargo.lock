@@ -912,30 +912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fflag-check"
-version = "0.6.13"
-dependencies = [
- "aho-corasick",
- "chrono",
- "glob",
- "hex",
- "hmac",
- "memchr",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "walkdir",
- "windows-sys 0.60.2",
-]
-
-[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2031,8 +2007,8 @@ name = "memory-evidence-exporter"
 version = "0.6.13"
 dependencies = [
  "chrono",
- "fflag-check",
  "hex",
+ "prism",
  "serde",
  "serde_json",
  "sha2",
@@ -2739,6 +2715,30 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "prism"
+version = "0.6.13"
+dependencies = [
+ "aho-corasick",
+ "chrono",
+ "glob",
+ "hex",
+ "hmac",
+ "memchr",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "walkdir",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

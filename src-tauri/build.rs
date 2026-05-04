@@ -42,6 +42,26 @@ fn main() {
 
     fs::write(&key_path, key).expect("write hmac_key.bin");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=app.manifest");
+    println!("cargo:rerun-if-changed=app.dev.manifest");
 
-    tauri_build::build();
+    // Embed a Windows application manifest. In release builds we request
+    // `requireAdministrator` so the OS prompts for UAC on every launch and
+    // the resulting process has the privileges the memory scanner needs
+    // (PROCESS_VM_READ on the Roblox process). In debug builds we fall
+    // back to `asInvoker` — `cargo tauri dev` runs the exe non-elevated
+    // and Windows refuses to silently elevate, returning ERROR_ELEVATION
+    // _REQUIRED (740) and breaking hot-reload. The dev variant still pulls
+    // in Common Controls 6.0 so WebView2 can resolve TaskDialogIndirect.
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let manifest = if profile == "release" {
+        include_str!("app.manifest")
+    } else {
+        include_str!("app.dev.manifest")
+    };
+    let win_attrs = tauri_build::WindowsAttributes::new().app_manifest(manifest);
+    let attrs = tauri_build::Attributes::new().windows_attributes(win_attrs);
+    if let Err(e) = tauri_build::try_build(attrs) {
+        panic!("tauri_build::try_build failed: {}", e);
+    }
 }

@@ -76,7 +76,7 @@ Each scan generates a JSON report:
 - **`Suspicious`** — evidence consistent with abuse, but the signal alone is not strong enough to auto-accuse. Requires operator review before any tournament action. The heap string-scan value-match path is **deliberately capped at Suspicious** — it can never auto-Flag — so that a future curated-rule misclassification, a rare vanilla heap coincidence, or any other low-confidence signal cannot directly cost a player their entry.
 - **`Flagged`** — high-confidence evidence: injector tool markers within the proximity window of a known-suspicious flag, a live FastFlag registry override carrying a curated cheat value, or equivalent multi-signal corroboration. Tournaments may treat this as ship-blocking.
 
-Reports are saved to the desktop as `FlagCheck_Report_{timestamp}.json`.
+Reports are saved (or to the location chosen via the Save-As dialog) as `Prism_Report_{timestamp}.json`.
 
 ### Limits of the current trust model
 
@@ -125,7 +125,7 @@ CI publishes one portable Windows scanner `.exe` (no installer) plus macOS Intel
 ## Project structure
 
 ```
-fflag-check/
+prism/
 ├── src/                          # React + TypeScript frontend
 │   ├── App.tsx                   # Main app + ErrorBoundary
 │   ├── main.tsx                  # React root

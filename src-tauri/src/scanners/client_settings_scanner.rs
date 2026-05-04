@@ -751,7 +751,7 @@ mod tests {
     fn tmpdir() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "fflag-check-test-{}-{}",
+            "prism-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

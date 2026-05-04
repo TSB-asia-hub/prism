@@ -1,10 +1,10 @@
 [package]
-name = "fflag-check"
+name = "prism"
 version = "0.6.13"
-description = "TSBCC FFlag Scanner — tournament integrity tool for Roblox FFlag detection"
+description = "Prism — tournament integrity tool for Roblox FFlag detection"
 authors = ["TSBCC"]
 edition = "2021"
-default-run = "fflag-check"
+default-run = "prism"
 autobins = false
 
 [workspace]
@@ -13,11 +13,11 @@ default-members = ["."]
 resolver = "2"
 
 [[bin]]
-name = "fflag-check"
+name = "prism"
 path = "src/main.rs"
 
 [lib]
-name = "fflag_check_lib"
+name = "prism_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
