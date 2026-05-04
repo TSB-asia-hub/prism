@@ -526,9 +526,8 @@ fn json_flag_match_detail(hit: &JsonFlagMatch) -> String {
 static FFLAG_PREFIX_AC: OnceLock<AhoCorasick> = OnceLock::new();
 
 fn fflag_prefix_ac() -> &'static AhoCorasick {
-    FFLAG_PREFIX_AC.get_or_init(|| {
-        AhoCorasick::new(FFLAG_KEY_PREFIXES).expect("FFlag prefix AC build")
-    })
+    FFLAG_PREFIX_AC
+        .get_or_init(|| AhoCorasick::new(FFLAG_KEY_PREFIXES).expect("FFlag prefix AC build"))
 }
 
 fn content_has_flag_prefix(content: &str) -> bool {
@@ -540,13 +539,18 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 /// Read the value that appears immediately after a flag-shaped token in
-/// free-form text. Skips delimiters that typical FFlag config files use
-/// (`:` `=` `,` `;` plus whitespace and surrounding quotes), and reads up
-/// to the next quote / comma / whitespace. Returns `<no value>` if nothing
-/// readable follows the token.
-fn extract_text_flag_value(after_token: &str) -> String {
-    let trimmed =
-        after_token.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '=' | ',' | ';'));
+/// free-form text. Requires a normal key/value delimiter (`:` or `=`), so a
+/// sentence that merely names a bad flag does not become evidence.
+fn extract_text_flag_value(after_token: &str) -> Option<String> {
+    let mut trimmed = after_token.trim_start();
+    if matches!(trimmed.chars().next(), Some('"') | Some('\'')) {
+        trimmed = trimmed[1..].trim_start();
+    }
+    let delimiter = trimmed.chars().next()?;
+    if !matches!(delimiter, ':' | '=') {
+        return None;
+    }
+    let trimmed = trimmed[delimiter.len_utf8()..].trim_start();
     let (quoted, body) = match trimmed.chars().next() {
         Some('"') => (true, &trimmed[1..]),
         Some('\'') => (true, &trimmed[1..]),
@@ -561,9 +565,9 @@ fn extract_text_flag_value(after_token: &str) -> String {
     };
     let value = body[..end].trim();
     if value.is_empty() {
-        "<no value>".to_string()
+        None
     } else {
-        truncate_for_detail(value, 96)
+        Some(truncate_for_detail(value, 96))
     }
 }
 
@@ -595,7 +599,9 @@ fn text_flag_matches(content: &str) -> Vec<JsonFlagMatch> {
             if !looks_like_fflag_key(token) {
                 continue;
             }
-            let value = extract_text_flag_value(&line[i..]);
+            let Some(value) = extract_text_flag_value(&line[i..]) else {
+                continue;
+            };
             push_json_flag_match(&mut matches, token, value, format!("L{}", line_idx + 1));
         }
     }
@@ -611,8 +617,16 @@ fn text_flag_matches(content: &str) -> Vec<JsonFlagMatch> {
 fn ext_is_flag_text_candidate(ext: Option<&str>) -> bool {
     matches!(
         ext,
-        None | Some("json") | Some("txt") | Some("cfg") | Some("conf") | Some("config")
-            | Some("ini") | Some("log") | Some("yml") | Some("yaml") | Some("env")
+        None | Some("json")
+            | Some("txt")
+            | Some("cfg")
+            | Some("conf")
+            | Some("config")
+            | Some("ini")
+            | Some("log")
+            | Some("yml")
+            | Some("yaml")
+            | Some("env")
     )
 }
 
@@ -635,6 +649,9 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
     let mut source_kind = "Text";
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
         collect_json_flag_matches(&parsed, "$", 0, &mut matches);
+        if matches.is_empty() {
+            return None;
+        }
         if !matches.is_empty() {
             source_kind = "JSON";
         }
@@ -653,16 +670,28 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
         .unwrap_or_else(|| path.display().to_string());
     let description = match (&verdict, source_kind) {
         (ScanVerdict::Flagged, "JSON") => {
-            format!("Critical FFlag values found in JSON file: \"{}\"", file_name)
+            format!(
+                "Critical FFlag values found in JSON file: \"{}\"",
+                file_name
+            )
         }
         (ScanVerdict::Flagged, _) => {
-            format!("Critical FFlag values found in text file: \"{}\"", file_name)
+            format!(
+                "Critical FFlag values found in text file: \"{}\"",
+                file_name
+            )
         }
         (ScanVerdict::Suspicious, "JSON") => {
-            format!("Suspicious FFlag values found in JSON file: \"{}\"", file_name)
+            format!(
+                "Suspicious FFlag values found in JSON file: \"{}\"",
+                file_name
+            )
         }
         (ScanVerdict::Suspicious, _) => {
-            format!("Suspicious FFlag values found in text file: \"{}\"", file_name)
+            format!(
+                "Suspicious FFlag values found in text file: \"{}\"",
+                file_name
+            )
         }
         (ScanVerdict::Clean, "JSON") => {
             format!("FFlag-shaped JSON entries found: \"{}\"", file_name)
@@ -1433,7 +1462,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_reports_flat_flag_maps() {
+    fn flag_file_finding_reports_flat_flag_maps() {
         let root =
             std::env::temp_dir().join(format!("fflag_check_json_flat_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -1444,7 +1473,7 @@ mod tests {
         )
         .unwrap();
 
-        let finding = json_flag_file_finding(&path).expect("json flag finding");
+        let finding = flag_file_finding(&path).expect("json flag finding");
         assert!(matches!(finding.verdict, ScanVerdict::Flagged));
         let details = finding.details.as_deref().unwrap_or_default();
         assert!(details.contains("DFIntS2PhysicsSenderRate = 1"));
@@ -1454,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_reports_nested_flag_arrays() {
+    fn flag_file_finding_reports_nested_flag_arrays() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_nested_test_{}",
             std::process::id()
@@ -1467,7 +1496,7 @@ mod tests {
         )
         .unwrap();
 
-        let finding = json_flag_file_finding(&path).expect("nested json flag finding");
+        let finding = flag_file_finding(&path).expect("nested json flag finding");
         assert!(matches!(finding.verdict, ScanVerdict::Flagged));
         let details = finding.details.as_deref().unwrap_or_default();
         assert!(details.contains("DFIntDataSenderRate = -1"));
@@ -1477,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
+    fn flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_negative_test_{}",
             std::process::id()
@@ -1490,13 +1519,13 @@ mod tests {
         )
         .unwrap();
 
-        assert!(json_flag_file_finding(&path).is_none());
+        assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn json_flag_file_finding_ignores_allowlisted_only_json() {
+    fn flag_file_finding_ignores_allowlisted_only_json() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_allowlisted_test_{}",
             std::process::id()
@@ -1505,7 +1534,48 @@ mod tests {
         let path = root.join("allowlisted.json");
         std::fs::write(&path, r#"{"FFlagDebugGraphicsPreferD3D11":true}"#).unwrap();
 
-        assert!(json_flag_file_finding(&path).is_none());
+        assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_reports_text_flag_maps() {
+        let root =
+            std::env::temp_dir().join(format!("fflag_check_text_flat_test_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("flags.txt");
+        std::fs::write(
+            &path,
+            "DFIntS2PhysicsSenderRate: 1\nFIntCameraFarZPlane = 0\n",
+        )
+        .unwrap();
+
+        let finding = flag_file_finding(&path).expect("text flag finding");
+        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
+        let details = finding.details.as_deref().unwrap_or_default();
+        assert!(details.contains("Source: Text"));
+        assert!(details.contains("DFIntS2PhysicsSenderRate = 1"));
+        assert!(details.contains("FIntCameraFarZPlane = 0"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_plain_text_mentions_without_values() {
+        let root = std::env::temp_dir().join(format!(
+            "fflag_check_text_mention_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(
+            &path,
+            "Tournament notes mention DFIntS2PhysicsSenderRate as a known bad flag name.",
+        )
+        .unwrap();
+
+        assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }
