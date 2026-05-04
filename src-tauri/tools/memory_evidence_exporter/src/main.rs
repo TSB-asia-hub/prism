@@ -4,7 +4,7 @@
 )]
 
 use chrono::Utc;
-use fflag_check_lib::data::suspicious_flags::{
+use prism_lib::data::suspicious_flags::{
     CRITICAL_FLAGS, HIGH_FLAGS, LOW_FLAGS, MEDIUM_FLAGS,
 };
 use serde::Serialize;

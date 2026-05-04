@@ -1,7 +1,7 @@
 import { Component, type KeyboardEvent as ReactKeyboardEvent, ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { save as showSaveDialog } from "@tauri-apps/plugin-dialog";
+import { open as showOpenDialog, save as showSaveDialog } from "@tauri-apps/plugin-dialog";
 import type { ScanFinding, ScanReport, ScanVerdict } from "./types";
 
 // Version is wired in at build time from package.json by Vite's __APP_VERSION__
@@ -77,6 +77,26 @@ function findingKey(f: ScanFinding): string {
   return `${f.module}|${f.timestamp}|${f.description}|${f.details ?? ""}`;
 }
 
+// Metadata about a report loaded from disk via the Import button. Mirrors
+// `ImportedReport` on the Rust side (commands.rs). When non-null the UI
+// shows an "IMPORTED" badge with signature/staleness status and disables
+// Export (re-exporting an imported file would re-run scanners and produce
+// an unrelated report — confusing for tournament-review workflows).
+type ImportMeta = {
+  signatureValid: boolean;
+  ageSeconds: number;
+  stale: boolean;
+  sourcePath: string;
+};
+
+type ImportPayload = {
+  report: ScanReport;
+  signature_valid: boolean;
+  age_seconds: number;
+  stale: boolean;
+  source_path: string;
+};
+
 function AppInner() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<ScanReport | null>(null);
@@ -86,6 +106,8 @@ function AppInner() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [tauriReady, setTauriReady] = useState<boolean>(() => hasTauriRuntime());
   const [exportInFlight, setExportInFlight] = useState(false);
+  const [importInFlight, setImportInFlight] = useState(false);
+  const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const scanInFlight = useRef(false);
 
   // The Tauri runtime is injected synchronously in the real webview, but if
@@ -179,6 +201,7 @@ function AppInner() {
     scanInFlight.current = true;
     setPhase("scanning");
     setReport(null);
+    setImportMeta(null);
     setOpenKey(null);
     setFilter("all");
     setProgress(emptyProgress());
@@ -193,6 +216,55 @@ function AppInner() {
       scanInFlight.current = false;
     }
   }, []);
+
+  const importReport = useCallback(async () => {
+    if (importInFlight) return;
+    if (!hasTauriRuntime()) {
+      setToast({ msg: "Tauri runtime not detected — cannot import.", kind: "error" });
+      return;
+    }
+    setImportInFlight(true);
+    try {
+      const chosen = await showOpenDialog({
+        title: "Import scan report",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "JSON report", extensions: ["json"] }],
+      });
+      if (!chosen) {
+        setImportInFlight(false);
+        return;
+      }
+      // tauri-plugin-dialog returns string | string[] | null depending on
+      // mode; we asked for `multiple: false`, so collapse to string.
+      const path = Array.isArray(chosen) ? chosen[0] : chosen;
+      if (!path) {
+        setImportInFlight(false);
+        return;
+      }
+      const payload = await invoke<ImportPayload>("import_report", { path });
+      setReport(payload.report);
+      setImportMeta({
+        signatureValid: payload.signature_valid,
+        ageSeconds: payload.age_seconds,
+        stale: payload.stale,
+        sourcePath: payload.source_path,
+      });
+      setOpenKey(null);
+      setFilter("all");
+      setPhase("complete");
+      setToast({
+        msg: payload.signature_valid
+          ? `Imported report (signature valid${payload.stale ? ", stale" : ""})`
+          : "Imported report — signature did NOT verify",
+        kind: payload.signature_valid && !payload.stale ? "success" : "info",
+      });
+    } catch (err) {
+      setToast({ msg: `Import failed: ${String(err)}`, kind: "error" });
+    } finally {
+      setImportInFlight(false);
+    }
+  }, [importInFlight]);
 
   const exportReport = useCallback(async () => {
     if (!report || exportInFlight) return;
@@ -214,7 +286,7 @@ function AppInner() {
         .replace("T", "_");
       const chosenPath = await showSaveDialog({
         title: "Save scan report",
-        defaultPath: `FlagCheck_Report_${ts}.json`,
+        defaultPath: `Prism_Report_${ts}.json`,
         filters: [{ name: "JSON report", extensions: ["json"] }],
       });
       if (!chosenPath) {
@@ -281,8 +353,11 @@ function AppInner() {
         report={report}
         onScan={runScan}
         onExport={exportReport}
+        onImport={importReport}
         disabled={!tauriReady}
         exportInFlight={exportInFlight}
+        importInFlight={importInFlight}
+        importMeta={importMeta}
       />
       <Summary
         phase={phase}
@@ -313,15 +388,21 @@ function Toolbar({
   report,
   onScan,
   onExport,
+  onImport,
   disabled = false,
   exportInFlight = false,
+  importInFlight = false,
+  importMeta = null,
 }: {
   phase: Phase;
   report: ScanReport | null;
   onScan: () => void;
   onExport: () => void;
+  onImport: () => void;
   disabled?: boolean;
   exportInFlight?: boolean;
+  importInFlight?: boolean;
+  importMeta?: ImportMeta | null;
 }) {
   const lastScan =
     phase === "scanning"
@@ -333,13 +414,20 @@ function Toolbar({
   const os = report?.os_info ?? "—";
   const machine = report?.machine_id ?? "—";
 
+  const importBadge = importMeta
+    ? importMeta.signatureValid
+      ? importMeta.stale
+        ? { tone: "warn" as const, label: "imported · stale" }
+        : { tone: "ok" as const, label: "imported · verified" }
+      : { tone: "danger" as const, label: "imported · unverified" }
+    : null;
+
   return (
     <header className="toolbar">
       <div className="toolbar__left">
         <div className="brand">
           <span className="brand__logo" />
-          <span>Echo</span>
-          <span className="brand__sub">/ Integrity</span>
+          <span>Prism</span>
         </div>
         <div className="toolbar__divider" />
         <div className="toolbar__meta">
@@ -356,9 +444,26 @@ function Toolbar({
             <span className="toolbar__meta-value">{lastScan}</span>
           </div>
         </div>
+        {importBadge && (
+          <span
+            className={`import-badge import-badge--${importBadge.tone}`}
+            title={importMeta ? importBadgeTitle(importMeta) : undefined}
+          >
+            <span className="import-badge__dot" aria-hidden="true" />
+            {importBadge.label}
+          </span>
+        )}
       </div>
       <div className="toolbar__right">
-        {phase === "complete" && report && (
+        <button
+          className="btn btn--ghost"
+          onClick={onImport}
+          disabled={disabled || importInFlight || phase === "scanning"}
+          title="Open a previously-exported scan report (.json)"
+        >
+          {importInFlight ? "Loading…" : "Import"}
+        </button>
+        {phase === "complete" && report && !importMeta && (
           <button
             className="btn btn--ghost"
             onClick={onExport}
@@ -386,6 +491,21 @@ function Toolbar({
       </div>
     </header>
   );
+}
+
+// Tooltip text for the Import badge — explains the signature / staleness
+// state and shows the source file. Splitting this out keeps the JSX
+// readable when the verdict-token logic above changes.
+function importBadgeTitle(meta: ImportMeta): string {
+  const sig = meta.signatureValid ? "signature OK" : "signature INVALID";
+  const age =
+    meta.ageSeconds < 60
+      ? `${Math.max(0, Math.round(meta.ageSeconds))}s old`
+      : meta.ageSeconds < 3600
+        ? `${Math.round(meta.ageSeconds / 60)}m old`
+        : `${Math.round(meta.ageSeconds / 3600)}h old`;
+  const stale = meta.stale ? " (exceeds 30m freshness window)" : "";
+  return `${sig} · ${age}${stale}\n${meta.sourcePath}`;
 }
 
 /* ——————————————————————————————————————————————————————————— */
@@ -936,7 +1056,7 @@ function StatusBar({
           {state}
         </span>
         <span className="statusbar__sep">·</span>
-        <span>TSBCC v{APP_VERSION}</span>
+        <span>Prism v{APP_VERSION}</span>
       </div>
       <div className="statusbar__group">
         <span>Local only</span>

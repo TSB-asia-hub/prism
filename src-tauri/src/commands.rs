@@ -1,7 +1,29 @@
+use serde::Serialize;
+
 use crate::models::ScanReport;
 use crate::reports::report_generator;
 use crate::scanners;
 use crate::scanners::progress::ScanProgress;
+
+/// Wire-format payload returned by `import_report`. Carries the parsed
+/// report plus enough provenance metadata for the UI to surface a clear
+/// "this is an imported file, not a live scan" banner. The frontend gets
+/// the report unconditionally even when the signature/freshness check
+/// fails — refusing to display old reports would prevent legitimate
+/// review of historical scan output, which is one of the main reasons
+/// import exists.
+#[derive(Serialize)]
+pub struct ImportedReport {
+    pub report: ScanReport,
+    pub signature_valid: bool,
+    /// Age in seconds (negative if the report's timestamp is in the future).
+    pub age_seconds: i64,
+    /// True when `age_seconds` exceeds the validator's freshness window.
+    pub stale: bool,
+    /// Absolute path of the file the user picked. Surfaced so the operator
+    /// can confirm which file is on screen.
+    pub source_path: String,
+}
 
 /// Run all scanners and generate a signed scan report. The signed report is
 /// returned to the frontend for display only — when the user exports, the
@@ -37,4 +59,29 @@ pub async fn save_report(path: Option<String>) -> Result<String, String> {
 #[tauri::command]
 pub async fn validate_report(json: String) -> Result<bool, String> {
     report_generator::validate_report(&json)
+}
+
+/// Read a previously-exported report file, parse it, and return the
+/// report plus the signature / freshness verification result. Reading
+/// happens in the backend (rather than the frontend's `readTextFile`) so
+/// the Tauri permission surface stays minimal — the only path the UI
+/// supplies is the one the user just chose in the native open dialog.
+#[tauri::command]
+pub async fn import_report(path: String) -> Result<ImportedReport, String> {
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Could not read report file: {}", e))?;
+    let report: ScanReport =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid report JSON: {}", e))?;
+    let signature_valid = report.verify();
+    let age_seconds = chrono::Utc::now()
+        .signed_duration_since(report.timestamp)
+        .num_seconds();
+    let stale = age_seconds > 30 * 60;
+    Ok(ImportedReport {
+        report,
+        signature_valid,
+        age_seconds,
+        stale,
+        source_path: path,
+    })
 }

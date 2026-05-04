@@ -158,7 +158,7 @@ jobs:
             exit 0
           }
 
-          $certPath = Join-Path $env:RUNNER_TEMP 'tsbcc-fflag-scanner.pfx'
+          $certPath = Join-Path $env:RUNNER_TEMP 'prism.pfx'
           [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
 
           $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
@@ -186,7 +186,7 @@ jobs:
           }
 
           $targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
-          $mainExe = Join-Path $targetRoot "$env:TARGET\release\fflag-check.exe"
+          $mainExe = Join-Path $targetRoot "$env:TARGET\release\prism.exe"
           if (!(Test-Path $mainExe)) { throw "Build output not found: $mainExe" }
 
           $programFilesX86 = [Environment]::GetFolderPath('ProgramFilesX86')
@@ -218,13 +218,13 @@ jobs:
           $assetDir = "release-assets"
           New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
           $targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
-          $src = Join-Path $targetRoot "$env:TARGET\release\fflag-check.exe"
+          $src = Join-Path $targetRoot "$env:TARGET\release\prism.exe"
           if (!(Test-Path $src)) { throw "Build output not found: $src" }
-          $dest = Join-Path $assetDir "TSBCC-FFlag-Scanner-$env:TAG-$env:ASSET_SUFFIX"
+          $dest = Join-Path $assetDir "Prism-$env:TAG-$env:ASSET_SUFFIX"
           Copy-Item $src $dest
 
           "asset_path=$assetDir/*" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "artifact_name=TSBCC-FFlag-Scanner-$env:TAG-windows-assets" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "artifact_name=Prism-$env:TAG-windows-assets" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Stage release asset (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -242,10 +242,10 @@ jobs:
             ls -la "src-tauri/target/${TARGET}/release/bundle/" || true
             exit 1
           fi
-          dest="release-assets/TSBCC-FFlag-Scanner-${TAG}-${ASSET_SUFFIX}"
+          dest="release-assets/Prism-${TAG}-${ASSET_SUFFIX}"
           cp "$src" "$dest"
           echo "asset_path=release-assets/*" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=TSBCC-FFlag-Scanner-${TAG}-macos-assets" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=Prism-${TAG}-macos-assets" >> "$GITHUB_OUTPUT"
 
       - name: Resolve staged asset name
         id: stage
