@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
+use aho_corasick::AhoCorasick;
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::data::flag_allowlist::is_allowed_flag;
@@ -28,6 +32,19 @@ const FFLAG_KEY_PREFIXES: &[&str] = &[
     "FFlag", "DFFlag", "DFInt", "FInt", "DFString", "FString", "DFLog", "FLog", "SFFlag", "SFInt",
     "SFString",
 ];
+
+/// Wall-clock cap for the whole-system broad scan. Walking every drive on a
+/// typical machine takes well under this even with FFlag content scanning;
+/// the budget exists so a slow / encrypted / network-mounted volume can
+/// never hang the scanner. On expiry the broad pass aborts and emits an
+/// Inconclusive note saying coverage was time-truncated.
+const BROAD_SCAN_TIME_BUDGET: Duration = Duration::from_secs(45);
+
+/// Files-per-batch for the broad pass. We collect candidate paths into
+/// fixed-size batches and dispatch each batch to rayon — this keeps memory
+/// bounded on huge filesystems while still saturating the CPU during the
+/// content-scan I/O.
+const BROAD_SCAN_BATCH: usize = 256;
 
 /// Scan the filesystem for known tool artifacts.
 pub async fn scan() -> Vec<ScanFinding> {
@@ -110,250 +127,42 @@ pub async fn scan() -> Vec<ScanFinding> {
             }
         }
 
-        // Tool executables (depth-limited walk).
-        let walker = WalkDir::new(root)
+        // Tool executables + flag-content files (depth-limited walk).
+        // Phase 1: enumerate file paths sequentially (walkdir is bounded by
+        // a single directory scan, so parallelizing the walk itself buys
+        // little). Phase 2: process each entry's hashing / PE inspection /
+        // content scan in parallel via rayon, then dedup-and-merge into
+        // the running findings list. This is where the speedup lives —
+        // hashing and PE fingerprint scans were the dominant cost and ran
+        // strictly serial before.
+        let entries: Vec<walkdir::DirEntry> = WalkDir::new(root)
             .max_depth(3)
             .follow_links(false)
             .into_iter()
-            .filter_map(|e| e.ok());
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .collect();
 
-        for entry in walker {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if is_current_executable_path(entry.path(), current_exe.as_deref()) {
-                continue;
-            }
+        let current_exe_ref = current_exe.as_deref();
+        let new_findings: Vec<(PathBuf, ScanFinding)> = entries
+            .par_iter()
+            .flat_map_iter(|entry| process_file_entry(entry, current_exe_ref).into_iter())
+            .collect();
 
-            let file_name_os = entry.file_name().to_string_lossy().to_string();
-            let file_name = file_name_os.as_str();
-            let file_ext = lower_ext(entry.path());
-
-            if file_ext.as_deref() == Some("json") {
-                if let Some(finding) = json_flag_file_finding(entry.path()) {
-                    let canon = entry
-                        .path()
-                        .canonicalize()
-                        .unwrap_or_else(|_| entry.path().to_path_buf());
-                    if reported_paths.insert(canon) {
-                        findings.push(finding);
-                    }
-                }
-                continue;
-            }
-
-            // Hash-based match: strongest on-disk evidence. Do this before
-            // name matching so an unrenamed `LornoFix.exe` still gets the
-            // Flagged SHA-256 verdict instead of being downgraded to a
-            // Suspicious filename hit.
-            let ext_is_candidate = matches!(
-                file_ext.as_deref(),
-                Some("exe") | Some("zip") | Some("dmg") | Some("app")
-            );
-            let mut matched_by_hash = false;
-            if ext_is_candidate {
-                let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(u64::MAX);
-                if size <= HASH_SIZE_LIMIT_BYTES {
-                    if let Some(hex) = hash_file_sha256(entry.path()) {
-                        for &(known_hex, display_name, note) in KNOWN_TOOL_HASHES {
-                            if hex.eq_ignore_ascii_case(known_hex) {
-                                let canon = entry
-                                    .path()
-                                    .canonicalize()
-                                    .unwrap_or_else(|_| entry.path().to_path_buf());
-                                if reported_paths.insert(canon.clone()) {
-                                    let payload_detail = (file_ext.as_deref() == Some("exe"))
-                                        .then(|| injector_payload_detail(entry.path()))
-                                        .flatten();
-                                    findings.push(ScanFinding::new(
-                                        "file_scanner",
-                                        ScanVerdict::Flagged,
-                                        format!(
-                                            "Known tool artefact matched by SHA-256: \"{}\" (as \"{}\")",
-                                            display_name, file_name
-                                        ),
-                                        Some(format!(
-                                            "Path: {}, SHA-256: {}, Last modified: {}, Note: {}{}",
-                                            entry.path().display(),
-                                            hex,
-                                            format_modified(entry.path()),
-                                            note,
-                                            payload_detail
-                                                .as_deref()
-                                                .map(|d| format!(" | {}", d))
-                                                .unwrap_or_default()
-                                        )),
-                                    ));
-                                }
-                                matched_by_hash = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            if matched_by_hash {
-                continue;
-            }
-
-            // Content-fingerprint match: catches renamed/recompiled tool
-            // binaries. Run only on PE candidates we already size-clamped
-            // for hashing — same I/O budget, same size guard. Flagged
-            // verdict (not Suspicious) because the fingerprints are unique
-            // log strings / leaked PDB paths that have no legitimate use.
-            let mut matched_by_fingerprint = false;
-            if ext_is_candidate && file_ext.as_deref() == Some("exe") {
-                let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(u64::MAX);
-                if size <= HASH_SIZE_LIMIT_BYTES && file_starts_with_mz(entry.path()) {
-                    if let Some(fp) = pe_content_fingerprint(entry.path()) {
-                        let canon = entry
-                            .path()
-                            .canonicalize()
-                            .unwrap_or_else(|_| entry.path().to_path_buf());
-                        if reported_paths.insert(canon.clone()) {
-                            let payload_detail = injector_payload_detail(entry.path());
-                            findings.push(ScanFinding::new(
-                                "file_scanner",
-                                ScanVerdict::Flagged,
-                                format!(
-                                    "Known tool binary matched by content fingerprint: \"{}\" (as \"{}\")",
-                                    fp.display_name, file_name
-                                ),
-                                Some(format!(
-                                    "Path: {}, Last modified: {}, Note: {}{}",
-                                    entry.path().display(),
-                                    format_modified(entry.path()),
-                                    fp.note,
-                                    payload_detail
-                                        .as_deref()
-                                        .map(|d| format!(" | {}", d))
-                                        .unwrap_or_default()
-                                )),
-                            ));
-                        }
-                        matched_by_fingerprint = true;
-                    }
-                }
-            }
-            if matched_by_fingerprint {
-                continue;
-            }
-
-            // Name-based match.
-            let mut matched_by_name = false;
-            for &known_file in KNOWN_TOOL_FILENAMES {
-                if file_name.eq_ignore_ascii_case(known_file) {
-                    let canon = entry
-                        .path()
-                        .canonicalize()
-                        .unwrap_or_else(|_| entry.path().to_path_buf());
-                    if reported_paths.insert(canon.clone()) {
-                        let payload_detail = injector_payload_detail(entry.path());
-                        findings.push(ScanFinding::new(
-                            "file_scanner",
-                            ScanVerdict::Suspicious,
-                            format!("Known tool executable found: \"{}\"", file_name),
-                            Some(format!(
-                                "Path: {}, Last modified: {}{}",
-                                entry.path().display(),
-                                format_modified(entry.path()),
-                                payload_detail
-                                    .as_deref()
-                                    .map(|d| format!(" | {}", d))
-                                    .unwrap_or_default()
-                            )),
-                        ));
-                    }
-                    matched_by_name = true;
-                    break;
-                }
-            }
-            if matched_by_name {
-                continue;
-            }
-
-            // Bootstrapper executable/installer artefacts — informational
-            // only. This catches portable/off-GitHub builds such as a
-            // standalone Homiestrap.exe without treating them as cheats.
-            if file_ext.as_deref() == Some("exe") {
-                let mut matched_bootstrapper = false;
-                for &known_file in KNOWN_BOOTSTRAPPER_FILENAMES {
-                    if file_name.eq_ignore_ascii_case(known_file) {
-                        let canon = entry
-                            .path()
-                            .canonicalize()
-                            .unwrap_or_else(|_| entry.path().to_path_buf());
-                        if reported_paths.insert(canon.clone()) {
-                            findings.push(ScanFinding::new(
-                                "file_scanner",
-                                ScanVerdict::Clean,
-                                format!(
-                                    "Bootstrapper executable present: \"{}\" (legitimate launcher family; not a cheat indicator)",
-                                    file_name
-                                ),
-                                Some(format!(
-                                    "Path: {}, Last modified: {}",
-                                    entry.path().display(),
-                                    format_modified(entry.path())
-                                )),
-                            ));
-                        }
-                        matched_bootstrapper = true;
-                        break;
-                    }
-                }
-                if matched_bootstrapper {
-                    continue;
-                }
-            }
-
-            // Sibling-config heuristic: PE with fflags.json + address.json next
-            // to it is the LornoFix family's on-disk layout. This is a
-            // filename heuristic with no content verification, so it is
-            // Suspicious — not Flagged. A real PE-magic check plus non-empty
-            // JSON shape keeps it from firing on zero-byte stubs named the
-            // same way in a developer's scratch folder.
-            if file_ext.as_deref() == Some("exe") {
-                if let Some(parent) = entry.path().parent() {
-                    let all_present = INJECTOR_SIBLING_CONFIG_FILES
-                        .iter()
-                        .all(|name| parent.join(name).is_file());
-                    let exe_looks_real = file_starts_with_mz(entry.path());
-                    let siblings_non_empty = INJECTOR_SIBLING_CONFIG_FILES.iter().all(|name| {
-                        std::fs::metadata(parent.join(name))
-                            .map(|m| m.len() >= 2) // enough to hold at least "{}"
-                            .unwrap_or(false)
-                    });
-                    if all_present && exe_looks_real && siblings_non_empty {
-                        let canon = entry
-                            .path()
-                            .canonicalize()
-                            .unwrap_or_else(|_| entry.path().to_path_buf());
-                        if reported_paths.insert(canon.clone()) {
-                            let payload_detail = injector_payload_detail(entry.path());
-                            findings.push(ScanFinding::new(
-                                "file_scanner",
-                                ScanVerdict::Suspicious,
-                                format!(
-                                    "Executable co-located with FFlag-injector config files: \"{}\"",
-                                    file_name
-                                ),
-                                Some(format!(
-                                    "Path: {}, Sibling config files: [{}]{}",
-                                    entry.path().display(),
-                                    INJECTOR_SIBLING_CONFIG_FILES.join(", "),
-                                    payload_detail
-                                        .as_deref()
-                                        .map(|d| format!(" | {}", d))
-                                        .unwrap_or_default()
-                                )),
-                            ));
-                        }
-                    }
-                }
+        for (canon, finding) in new_findings {
+            if reported_paths.insert(canon) {
+                findings.push(finding);
             }
         }
     }
+
+    // Whole-system content sweep. Runs after the focused roots so any file
+    // a higher-priority check already produced a finding for is filtered
+    // out by the shared `reported_paths` dedup set, and only adds new
+    // findings from places the focused roots couldn't reach (custom
+    // folders like D:\flags, OneDrive subtrees outside Documents, etc.).
+    let broad_findings = broad_scan(&mut reported_paths);
+    findings.extend(broad_findings);
 
     if findings.is_empty() {
         let scanned: Vec<String> = roots
@@ -707,12 +516,146 @@ fn json_flag_match_detail(hit: &JsonFlagMatch) -> String {
     )
 }
 
-fn json_flag_file_finding(path: &Path) -> Option<ScanFinding> {
-    let content = read_small_text_file(path, JSON_FLAG_SCAN_SIZE_LIMIT_BYTES).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+/// Aho-Corasick automaton over the FFlag prefix set. Used as a cheap
+/// pre-filter to skip files that obviously contain no flag-shaped tokens
+/// before paying for serde-json or full text tokenization. Built once on
+/// first use.
+static FFLAG_PREFIX_AC: OnceLock<AhoCorasick> = OnceLock::new();
 
+fn fflag_prefix_ac() -> &'static AhoCorasick {
+    FFLAG_PREFIX_AC
+        .get_or_init(|| AhoCorasick::new(FFLAG_KEY_PREFIXES).expect("FFlag prefix AC build"))
+}
+
+fn content_has_flag_prefix(content: &str) -> bool {
+    fflag_prefix_ac().find(content).is_some()
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Read the value that appears immediately after a flag-shaped token in
+/// free-form text. Requires a normal key/value delimiter (`:` or `=`), so a
+/// sentence that merely names a bad flag does not become evidence.
+fn extract_text_flag_value(after_token: &str) -> Option<String> {
+    let mut trimmed = after_token.trim_start();
+    if matches!(trimmed.chars().next(), Some('"') | Some('\'')) {
+        trimmed = trimmed[1..].trim_start();
+    }
+    let delimiter = trimmed.chars().next()?;
+    if !matches!(delimiter, ':' | '=') {
+        return None;
+    }
+    let trimmed = trimmed[delimiter.len_utf8()..].trim_start();
+    let (quoted, body) = match trimmed.chars().next() {
+        Some('"') => (true, &trimmed[1..]),
+        Some('\'') => (true, &trimmed[1..]),
+        _ => (false, trimmed),
+    };
+    let end = if quoted {
+        body.find(|c: char| matches!(c, '"' | '\''))
+            .unwrap_or(body.len())
+    } else {
+        body.find(|c: char| matches!(c, ',' | ';' | '"' | '\'' | '}' | ']') || c.is_whitespace())
+            .unwrap_or(body.len())
+    };
+    let value = body[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(truncate_for_detail(value, 96))
+    }
+}
+
+/// Walk free-form text content looking for FFlag-prefix identifiers. Each
+/// match captures the value that follows on the same line (using common
+/// `key: value` / `key = value` / `"key": value` shapes). Bounded by
+/// `MAX_JSON_FLAG_MATCHES_PER_FILE` so a giant text dump can't blow up
+/// memory or detail length.
+fn text_flag_matches(content: &str) -> Vec<JsonFlagMatch> {
     let mut matches = Vec::new();
-    collect_json_flag_matches(&parsed, "$", 0, &mut matches);
+    for (line_idx, line) in content.lines().enumerate() {
+        if matches.len() >= MAX_JSON_FLAG_MATCHES_PER_FILE {
+            break;
+        }
+        let bytes = line.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() && matches.len() < MAX_JSON_FLAG_MATCHES_PER_FILE {
+            while i < bytes.len() && !is_ident_byte(bytes[i]) {
+                i += 1;
+            }
+            let start = i;
+            while i < bytes.len() && is_ident_byte(bytes[i]) {
+                i += 1;
+            }
+            if start == i {
+                break;
+            }
+            let token = &line[start..i];
+            if !looks_like_fflag_key(token) {
+                continue;
+            }
+            let Some(value) = extract_text_flag_value(&line[i..]) else {
+                continue;
+            };
+            push_json_flag_match(&mut matches, token, value, format!("L{}", line_idx + 1));
+        }
+    }
+    matches
+}
+
+/// Check whether a file path's extension or extension-less filename should
+/// be treated as a candidate for FFlag content scanning. The set covers the
+/// formats real injectors and config dumpers actually use: JSON config,
+/// .txt notes, .cfg / .ini key-value lists, .log dumps, and the
+/// extension-less files Windows displays as "File" (often dropped from
+/// share-sheet exports or saved-from-clipboard pastes).
+fn ext_is_flag_text_candidate(ext: Option<&str>) -> bool {
+    matches!(
+        ext,
+        None | Some("json")
+            | Some("txt")
+            | Some("cfg")
+            | Some("conf")
+            | Some("config")
+            | Some("ini")
+            | Some("log")
+            | Some("yml")
+            | Some("yaml")
+            | Some("env")
+    )
+}
+
+/// General-purpose FFlag content scanner. Tries JSON parsing first (so a
+/// .txt that happens to be valid JSON still gets the structured-flag
+/// treatment), then falls back to a line-based text scan that captures
+/// `key: value` pairs around any FFlag-prefix identifier.
+///
+/// Cheap pre-filter: if the file body contains no FFlag-shaped prefix at
+/// all, bail before paying for serde-json or full tokenization. This keeps
+/// the scanner fast on large unrelated text files (game logs, chat
+/// transcripts, etc.) that happen to live under a scanned root.
+fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
+    let content = read_small_text_file(path, JSON_FLAG_SCAN_SIZE_LIMIT_BYTES).ok()?;
+    if !content_has_flag_prefix(&content) {
+        return None;
+    }
+
+    let mut matches: Vec<JsonFlagMatch> = Vec::new();
+    let mut source_kind = "Text";
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+        collect_json_flag_matches(&parsed, "$", 0, &mut matches);
+        if matches.is_empty() {
+            return None;
+        }
+        if !matches.is_empty() {
+            source_kind = "JSON";
+        }
+    }
+    if matches.is_empty() {
+        matches = text_flag_matches(&content);
+    }
     if matches.is_empty() {
         return None;
     }
@@ -722,24 +665,39 @@ fn json_flag_file_finding(path: &Path) -> Option<ScanFinding> {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string());
-    let description = match &verdict {
-        ScanVerdict::Flagged => {
+    let description = match (&verdict, source_kind) {
+        (ScanVerdict::Flagged, "JSON") => {
             format!(
                 "Critical FFlag values found in JSON file: \"{}\"",
                 file_name
             )
         }
-        ScanVerdict::Suspicious => {
+        (ScanVerdict::Flagged, _) => {
+            format!(
+                "Critical FFlag values found in text file: \"{}\"",
+                file_name
+            )
+        }
+        (ScanVerdict::Suspicious, "JSON") => {
             format!(
                 "Suspicious FFlag values found in JSON file: \"{}\"",
                 file_name
             )
         }
-        ScanVerdict::Clean => {
+        (ScanVerdict::Suspicious, _) => {
+            format!(
+                "Suspicious FFlag values found in text file: \"{}\"",
+                file_name
+            )
+        }
+        (ScanVerdict::Clean, "JSON") => {
             format!("FFlag-shaped JSON entries found: \"{}\"", file_name)
         }
-        ScanVerdict::Inconclusive => {
-            format!("FFlag JSON entries require review: \"{}\"", file_name)
+        (ScanVerdict::Clean, _) => {
+            format!("FFlag-shaped text entries found: \"{}\"", file_name)
+        }
+        (ScanVerdict::Inconclusive, _) => {
+            format!("FFlag entries require review: \"{}\"", file_name)
         }
     };
     let truncated = if matches.len() >= MAX_JSON_FLAG_MATCHES_PER_FILE {
@@ -752,8 +710,9 @@ fn json_flag_file_finding(path: &Path) -> Option<ScanFinding> {
         verdict,
         description,
         Some(format!(
-            "Path: {} | Flags: {}{}",
+            "Path: {} | Source: {} | Flags: {}{}",
             path.display(),
+            source_kind,
             matches
                 .iter()
                 .map(json_flag_match_detail)
@@ -762,6 +721,448 @@ fn json_flag_file_finding(path: &Path) -> Option<ScanFinding> {
             truncated
         )),
     ))
+}
+
+/// Per-entry scan worker. Encapsulates the hash / fingerprint / name /
+/// sibling-config / content-scan checks so the outer loop can dispatch
+/// each entry to a rayon worker. Returns up to one finding per file with
+/// its canonical path, in the same priority order the serial version
+/// used (hash > fingerprint > name > sibling-config), with the new
+/// flag-content scan running first for text-shaped files.
+fn process_file_entry(
+    entry: &walkdir::DirEntry,
+    current_exe: Option<&Path>,
+) -> Vec<(PathBuf, ScanFinding)> {
+    let mut out: Vec<(PathBuf, ScanFinding)> = Vec::new();
+    if is_current_executable_path(entry.path(), current_exe) {
+        return out;
+    }
+
+    let file_name_os = entry.file_name().to_string_lossy().to_string();
+    let file_name = file_name_os.as_str();
+    let file_ext = lower_ext(entry.path());
+
+    // Flag-content scan for JSON / text-shaped configs (and extension-less
+    // files, which Windows displays as the bare "File" type and which are a
+    // common shape for hand-edited or share-sheet-exported flag dumps).
+    if ext_is_flag_text_candidate(file_ext.as_deref()) {
+        if let Some(finding) = flag_file_finding(entry.path()) {
+            let canon = entry
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| entry.path().to_path_buf());
+            out.push((canon, finding));
+            return out;
+        }
+        // No flag content found; still fall through so a tool exe with a
+        // .txt-named installer companion gets every other check applied.
+    }
+
+    let ext_is_candidate = matches!(
+        file_ext.as_deref(),
+        Some("exe") | Some("zip") | Some("dmg") | Some("app")
+    );
+
+    // Hash-based match (strongest evidence — Flagged).
+    if ext_is_candidate {
+        let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(u64::MAX);
+        if size <= HASH_SIZE_LIMIT_BYTES {
+            if let Some(hex) = hash_file_sha256(entry.path()) {
+                for &(known_hex, display_name, note) in KNOWN_TOOL_HASHES {
+                    if hex.eq_ignore_ascii_case(known_hex) {
+                        let canon = entry
+                            .path()
+                            .canonicalize()
+                            .unwrap_or_else(|_| entry.path().to_path_buf());
+                        let payload_detail = (file_ext.as_deref() == Some("exe"))
+                            .then(|| injector_payload_detail(entry.path()))
+                            .flatten();
+                        out.push((
+                            canon,
+                            ScanFinding::new(
+                                "file_scanner",
+                                ScanVerdict::Flagged,
+                                format!(
+                                    "Known tool artefact matched by SHA-256: \"{}\" (as \"{}\")",
+                                    display_name, file_name
+                                ),
+                                Some(format!(
+                                    "Path: {}, SHA-256: {}, Last modified: {}, Note: {}{}",
+                                    entry.path().display(),
+                                    hex,
+                                    format_modified(entry.path()),
+                                    note,
+                                    payload_detail
+                                        .as_deref()
+                                        .map(|d| format!(" | {}", d))
+                                        .unwrap_or_default()
+                                )),
+                            ),
+                        ));
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+
+    // PE content fingerprint (renamed/recompiled tools — Flagged).
+    if ext_is_candidate && file_ext.as_deref() == Some("exe") {
+        let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(u64::MAX);
+        if size <= HASH_SIZE_LIMIT_BYTES && file_starts_with_mz(entry.path()) {
+            if let Some(fp) = pe_content_fingerprint(entry.path()) {
+                let canon = entry
+                    .path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| entry.path().to_path_buf());
+                let payload_detail = injector_payload_detail(entry.path());
+                out.push((
+                    canon,
+                    ScanFinding::new(
+                        "file_scanner",
+                        ScanVerdict::Flagged,
+                        format!(
+                            "Known tool binary matched by content fingerprint: \"{}\" (as \"{}\")",
+                            fp.display_name, file_name
+                        ),
+                        Some(format!(
+                            "Path: {}, Last modified: {}, Note: {}{}",
+                            entry.path().display(),
+                            format_modified(entry.path()),
+                            fp.note,
+                            payload_detail
+                                .as_deref()
+                                .map(|d| format!(" | {}", d))
+                                .unwrap_or_default()
+                        )),
+                    ),
+                ));
+                return out;
+            }
+        }
+    }
+
+    // Name-based match (Suspicious).
+    for &known_file in KNOWN_TOOL_FILENAMES {
+        if file_name.eq_ignore_ascii_case(known_file) {
+            let canon = entry
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| entry.path().to_path_buf());
+            let payload_detail = injector_payload_detail(entry.path());
+            out.push((
+                canon,
+                ScanFinding::new(
+                    "file_scanner",
+                    ScanVerdict::Suspicious,
+                    format!("Known tool executable found: \"{}\"", file_name),
+                    Some(format!(
+                        "Path: {}, Last modified: {}{}",
+                        entry.path().display(),
+                        format_modified(entry.path()),
+                        payload_detail
+                            .as_deref()
+                            .map(|d| format!(" | {}", d))
+                            .unwrap_or_default()
+                    )),
+                ),
+            ));
+            return out;
+        }
+    }
+
+    // Bootstrapper executable/installer artefacts — informational only.
+    // This catches portable/off-GitHub builds such as a standalone
+    // Homiestrap.exe without treating them as cheats.
+    if file_ext.as_deref() == Some("exe") {
+        for &known_file in KNOWN_BOOTSTRAPPER_FILENAMES {
+            if file_name.eq_ignore_ascii_case(known_file) {
+                let canon = entry
+                    .path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| entry.path().to_path_buf());
+                out.push((
+                    canon,
+                    ScanFinding::new(
+                        "file_scanner",
+                        ScanVerdict::Clean,
+                        format!(
+                            "Bootstrapper executable present: \"{}\" (legitimate launcher family; not a cheat indicator)",
+                            file_name
+                        ),
+                        Some(format!(
+                            "Path: {}, Last modified: {}",
+                            entry.path().display(),
+                            format_modified(entry.path())
+                        )),
+                    ),
+                ));
+                return out;
+            }
+        }
+    }
+
+    // Sibling-config heuristic: PE next to fflags.json + address.json
+    // (LornoFix-family on-disk layout — Suspicious).
+    if file_ext.as_deref() == Some("exe") {
+        if let Some(parent) = entry.path().parent() {
+            let all_present = INJECTOR_SIBLING_CONFIG_FILES
+                .iter()
+                .all(|name| parent.join(name).is_file());
+            let exe_looks_real = file_starts_with_mz(entry.path());
+            let siblings_non_empty = INJECTOR_SIBLING_CONFIG_FILES.iter().all(|name| {
+                std::fs::metadata(parent.join(name))
+                    .map(|m| m.len() >= 2)
+                    .unwrap_or(false)
+            });
+            if all_present && exe_looks_real && siblings_non_empty {
+                let canon = entry
+                    .path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| entry.path().to_path_buf());
+                let payload_detail = injector_payload_detail(entry.path());
+                out.push((
+                    canon,
+                    ScanFinding::new(
+                        "file_scanner",
+                        ScanVerdict::Suspicious,
+                        format!(
+                            "Executable co-located with FFlag-injector config files: \"{}\"",
+                            file_name
+                        ),
+                        Some(format!(
+                            "Path: {}, Sibling config files: [{}]{}",
+                            entry.path().display(),
+                            INJECTOR_SIBLING_CONFIG_FILES.join(", "),
+                            payload_detail
+                                .as_deref()
+                                .map(|d| format!(" | {}", d))
+                                .unwrap_or_default()
+                        )),
+                    ),
+                ));
+            }
+        }
+    }
+
+    out
+}
+
+/// Drive / volume roots to walk during the whole-system broad pass.
+/// On Windows we enumerate every existing drive letter A: through Z: so a
+/// game install on D: or external storage on E: still gets scanned. On
+/// Unix-likes we start at `/`; the same-filesystem flag in the walker
+/// keeps the pass from descending into network mounts and pseudo-fs.
+#[cfg(target_os = "windows")]
+fn broad_scan_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for c in b'A'..=b'Z' {
+        let p = PathBuf::from(format!("{}:\\", c as char));
+        if p.exists() {
+            roots.push(p);
+        }
+    }
+    roots
+}
+
+#[cfg(not(target_os = "windows"))]
+fn broad_scan_roots() -> Vec<PathBuf> {
+    vec![PathBuf::from("/")]
+}
+
+/// Cheap directory-name blacklist applied during the broad walk. These
+/// trees never legitimately host hand-edited FFlag dumps and are the bulk
+/// of the work on a normal machine — pruning them is the difference
+/// between a 5-second scan and a 5-minute scan. Match is
+/// case-insensitive, last-segment only.
+fn dir_name_should_skip(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        // Windows system / metadata
+        "windows"
+            | "$recycle.bin"
+            | "system volume information"
+            | "msocache"
+            | "perflogs"
+            | "$winreagent"
+            | "recovery"
+            | "windowsapps"
+            // Big package / build trees
+            | "node_modules"
+            | ".git"
+            | ".svn"
+            | ".hg"
+            | "target"
+            | "build"
+            | "dist"
+            | "out"
+            | ".next"
+            | ".nuxt"
+            | "vendor"
+            | "__pycache__"
+            | ".cache"
+            | ".gradle"
+            | ".vscode"
+            | ".idea"
+            | ".terraform"
+            // Game library installs (fast-skip — these are gigabytes of vendor data)
+            | "steamapps"
+            | "epic games"
+            | "gog galaxy"
+            | "origin games"
+            | "ea games"
+            | "battle.net"
+            | "riot games"
+            // Browser / Electron caches
+            | "code cache"
+            | "shadercache"
+            | "appcache"
+            | "gpucache"
+            | "service worker"
+            | "indexeddb"
+            | "blob_storage"
+            | "componentcrx"
+    )
+}
+
+/// Process a batch of candidate paths in parallel, returning the new
+/// findings paired with their canonical paths so the caller can dedup
+/// against the running reported-paths set.
+fn process_broad_batch(paths: &[PathBuf]) -> Vec<(PathBuf, ScanFinding)> {
+    paths
+        .par_iter()
+        .filter_map(|p| {
+            let finding = flag_file_finding(p)?;
+            let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            Some((canon, finding))
+        })
+        .collect()
+}
+
+/// Whole-system broad pass. Walks every drive root looking for FFlag-shaped
+/// content in text-shaped files (`.txt`, `.json`, `.cfg`, `.ini`, `.log`,
+/// `.yml`, `.env`, extensionless). Aggressively prunes system directories
+/// and developer noise via `dir_name_should_skip`, caps total wall-clock
+/// time via `BROAD_SCAN_TIME_BUDGET`, and processes files in parallel
+/// batches. Results are deduped against `reported_paths` so a file already
+/// found by the focused-roots pass keeps that higher-priority finding.
+///
+/// The broad pass never hashes binaries or runs PE fingerprinting — those
+/// stay scoped to the focused roots, where injectors actually install.
+/// Doing them across the whole system would add tens of seconds for no
+/// realistic gain on a flag-detection scan.
+fn broad_scan(reported_paths: &mut HashSet<PathBuf>) -> Vec<ScanFinding> {
+    let started = Instant::now();
+    let deadline = started + BROAD_SCAN_TIME_BUDGET;
+    let roots = broad_scan_roots();
+    let mut produced: Vec<ScanFinding> = Vec::new();
+    let mut scanned_files: usize = 0;
+    let mut timed_out = false;
+
+    'outer: for root in &roots {
+        if !root.exists() {
+            continue;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            break;
+        }
+
+        let walker = WalkDir::new(root)
+            .follow_links(false)
+            .same_file_system(true)
+            .into_iter()
+            .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
+                if e.file_type().is_dir() {
+                    let name = e.file_name().to_string_lossy();
+                    !dir_name_should_skip(&name)
+                } else {
+                    true
+                }
+            });
+
+        let mut batch: Vec<PathBuf> = Vec::with_capacity(BROAD_SCAN_BATCH);
+        for entry in walker.filter_map(|e| e.ok()) {
+            if Instant::now() >= deadline {
+                timed_out = true;
+                break 'outer;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let ext = lower_ext(entry.path());
+            if !ext_is_flag_text_candidate(ext.as_deref()) {
+                continue;
+            }
+            let size = match entry.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+            if size > JSON_FLAG_SCAN_SIZE_LIMIT_BYTES {
+                continue;
+            }
+            batch.push(entry.path().to_path_buf());
+
+            if batch.len() >= BROAD_SCAN_BATCH {
+                scanned_files += batch.len();
+                for (canon, finding) in process_broad_batch(&batch) {
+                    if reported_paths.insert(canon) {
+                        produced.push(finding);
+                    }
+                }
+                batch.clear();
+            }
+        }
+        if !batch.is_empty() {
+            scanned_files += batch.len();
+            for (canon, finding) in process_broad_batch(&batch) {
+                if reported_paths.insert(canon) {
+                    produced.push(finding);
+                }
+            }
+        }
+    }
+
+    let elapsed = started.elapsed();
+    let roots_summary = roots
+        .iter()
+        .map(|r| r.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verdict = if timed_out {
+        ScanVerdict::Inconclusive
+    } else {
+        ScanVerdict::Clean
+    };
+    let description = if timed_out {
+        format!(
+            "Whole-system flag content scan stopped at time budget ({} s) — partial coverage",
+            BROAD_SCAN_TIME_BUDGET.as_secs()
+        )
+    } else {
+        format!(
+            "Whole-system flag content scan complete: {} text candidate files inspected",
+            scanned_files
+        )
+    };
+    produced.push(ScanFinding::new(
+        "file_scanner",
+        verdict,
+        description,
+        Some(format!(
+            "Roots: {} | Files inspected: {} | Elapsed: {:.1} s | Budget: {} s",
+            roots_summary,
+            scanned_files,
+            elapsed.as_secs_f32(),
+            BROAD_SCAN_TIME_BUDGET.as_secs()
+        )),
+    ));
+
+    produced
 }
 
 fn injector_fflags_payload_summary(path: &Path) -> Option<String> {
@@ -933,6 +1334,10 @@ fn get_search_roots() -> Vec<PathBuf> {
             for &dir in GENERIC_RE_TOOL_DIRS {
                 push_unique_path(&mut roots, lad.join(dir));
             }
+            // Roblox's own LocalAppData tree houses ClientSettings and any
+            // user-edited FFlag overrides; injectors often save backups of
+            // their config alongside it.
+            push_unique_path(&mut roots, lad.join("Roblox"));
         }
         if let Ok(appdata) = std::env::var("APPDATA") {
             let roaming = PathBuf::from(&appdata);
@@ -943,6 +1348,9 @@ fn get_search_roots() -> Vec<PathBuf> {
             for &dir in KNOWN_BOOTSTRAPPER_DIRS {
                 push_unique_path(&mut roots, roaming.join(dir));
             }
+            // Some launchers (and Roblox itself, rarely) drop config under
+            // the roaming AppData\Roblox tree.
+            push_unique_path(&mut roots, roaming.join("Roblox"));
         }
         if let Ok(userprofile) = std::env::var("USERPROFILE") {
             let up = PathBuf::from(&userprofile);
@@ -1156,7 +1564,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_reports_flat_flag_maps() {
+    fn flag_file_finding_reports_flat_flag_maps() {
         let root =
             std::env::temp_dir().join(format!("fflag_check_json_flat_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -1167,7 +1575,7 @@ mod tests {
         )
         .unwrap();
 
-        let finding = json_flag_file_finding(&path).expect("json flag finding");
+        let finding = flag_file_finding(&path).expect("json flag finding");
         assert!(matches!(finding.verdict, ScanVerdict::Flagged));
         let details = finding.details.as_deref().unwrap_or_default();
         assert!(details.contains("DFIntS2PhysicsSenderRate = 1"));
@@ -1177,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_reports_nested_flag_arrays() {
+    fn flag_file_finding_reports_nested_flag_arrays() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_nested_test_{}",
             std::process::id()
@@ -1190,7 +1598,7 @@ mod tests {
         )
         .unwrap();
 
-        let finding = json_flag_file_finding(&path).expect("nested json flag finding");
+        let finding = flag_file_finding(&path).expect("nested json flag finding");
         assert!(matches!(finding.verdict, ScanVerdict::Flagged));
         let details = finding.details.as_deref().unwrap_or_default();
         assert!(details.contains("DFIntDataSenderRate = -1"));
@@ -1200,7 +1608,7 @@ mod tests {
     }
 
     #[test]
-    fn json_flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
+    fn flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_negative_test_{}",
             std::process::id()
@@ -1213,13 +1621,13 @@ mod tests {
         )
         .unwrap();
 
-        assert!(json_flag_file_finding(&path).is_none());
+        assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn json_flag_file_finding_ignores_allowlisted_only_json() {
+    fn flag_file_finding_ignores_allowlisted_only_json() {
         let root = std::env::temp_dir().join(format!(
             "fflag_check_json_allowlisted_test_{}",
             std::process::id()
@@ -1228,7 +1636,48 @@ mod tests {
         let path = root.join("allowlisted.json");
         std::fs::write(&path, r#"{"FFlagDebugGraphicsPreferD3D11":true}"#).unwrap();
 
-        assert!(json_flag_file_finding(&path).is_none());
+        assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_reports_text_flag_maps() {
+        let root =
+            std::env::temp_dir().join(format!("fflag_check_text_flat_test_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("flags.txt");
+        std::fs::write(
+            &path,
+            "DFIntS2PhysicsSenderRate: 1\nFIntCameraFarZPlane = 0\n",
+        )
+        .unwrap();
+
+        let finding = flag_file_finding(&path).expect("text flag finding");
+        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
+        let details = finding.details.as_deref().unwrap_or_default();
+        assert!(details.contains("Source: Text"));
+        assert!(details.contains("DFIntS2PhysicsSenderRate = 1"));
+        assert!(details.contains("FIntCameraFarZPlane = 0"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_plain_text_mentions_without_values() {
+        let root = std::env::temp_dir().join(format!(
+            "fflag_check_text_mention_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(
+            &path,
+            "Tournament notes mention DFIntS2PhysicsSenderRate as a known bad flag name.",
+        )
+        .unwrap();
+
+        assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }

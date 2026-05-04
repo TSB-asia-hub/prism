@@ -683,18 +683,63 @@ function Workarea({
       )}
 
       {phase === "complete" &&
-        findings.map((f) => {
-          const key = findingKey(f);
-          return (
-            <FindingRow
-              key={key}
-              rowKey={key}
-              finding={f}
-              open={openKey === key}
-              onToggle={onToggle}
-            />
-          );
-        })}
+        groupByVerdict(findings).map((group) => (
+          <div className="findings-group" key={group.verdict}>
+            <SectionHeader verdict={group.verdict} count={group.items.length} />
+            {group.items.map((f) => {
+              const key = findingKey(f);
+              return (
+                <FindingRow
+                  key={key}
+                  rowKey={key}
+                  finding={f}
+                  open={openKey === key}
+                  onToggle={onToggle}
+                />
+              );
+            })}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+// Group already-sorted findings into per-verdict buckets so the UI can
+// render a section header above each cluster (Flagged → Suspicious →
+// Inconclusive → Clean). The input arrives sorted by verdict rank from
+// `ordered`, so this is a single linear pass — no extra sort needed.
+function groupByVerdict(
+  findings: ScanFinding[],
+): { verdict: ScanVerdict; items: ScanFinding[] }[] {
+  const groups: { verdict: ScanVerdict; items: ScanFinding[] }[] = [];
+  for (const f of findings) {
+    const last = groups[groups.length - 1];
+    if (last && last.verdict === f.verdict) {
+      last.items.push(f);
+    } else {
+      groups.push({ verdict: f.verdict, items: [f] });
+    }
+  }
+  return groups;
+}
+
+// Section heading for a verdict cluster. Visual cue (color-coded dot)
+// reinforces the verdict colour shown on each row's left bar, so the
+// reader can scan the list by severity without reading the verdict
+// column on every row.
+function SectionHeader({
+  verdict,
+  count,
+}: {
+  verdict: ScanVerdict;
+  count: number;
+}) {
+  const cls = `section-header section-header--${verdict.toLowerCase()}`;
+  return (
+    <div className={cls}>
+      <span className="section-header__dot" aria-hidden="true" />
+      <span className="section-header__label">{verdict}</span>
+      <span className="section-header__count">{count}</span>
     </div>
   );
 }
