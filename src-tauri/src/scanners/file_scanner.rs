@@ -1397,7 +1397,7 @@ mod tests {
     fn hash_file_sha256_matches_known_value() {
         // "abc" → SHA-256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
         let dir =
-            std::env::temp_dir().join(format!("fflag_check_hash_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_hash_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("abc.bin");
         {
@@ -1457,7 +1457,7 @@ mod tests {
     #[test]
     fn self_scan_exclusion_matches_current_exe_path() {
         let root =
-            std::env::temp_dir().join(format!("fflag_check_self_scan_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_self_scan_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let exe = root.join("TSBCC-FFlag-Scanner-v0.6.12-windows-portable.exe");
         std::fs::write(&exe, b"MZ\x90\x00").unwrap();
@@ -1498,7 +1498,7 @@ mod tests {
         // Build a fake injector layout in a fresh temp dir and verify that
         // hash_file_sha256 + sibling-file logic would pick it up.
         let root =
-            std::env::temp_dir().join(format!("fflag_check_sibling_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_sibling_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let exe = root.join("tool.exe");
@@ -1519,7 +1519,7 @@ mod tests {
     #[test]
     fn injector_payload_detail_reports_lorno_flags_and_singleton_cache() {
         let root =
-            std::env::temp_dir().join(format!("fflag_check_payload_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_payload_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let exe = root.join("LornoFix.exe");
@@ -1543,7 +1543,7 @@ mod tests {
     #[test]
     fn injector_payload_detail_skips_allowlisted_only_payloads() {
         let root = std::env::temp_dir().join(format!(
-            "fflag_check_allowlisted_payload_test_{}",
+            "prism_allowlisted_payload_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -1566,7 +1566,7 @@ mod tests {
     #[test]
     fn flag_file_finding_reports_flat_flag_maps() {
         let root =
-            std::env::temp_dir().join(format!("fflag_check_json_flat_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_json_flat_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("fflags.json");
         std::fs::write(
@@ -1587,7 +1587,7 @@ mod tests {
     #[test]
     fn flag_file_finding_reports_nested_flag_arrays() {
         let root = std::env::temp_dir().join(format!(
-            "fflag_check_json_nested_test_{}",
+            "prism_json_nested_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -1610,7 +1610,7 @@ mod tests {
     #[test]
     fn flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
         let root = std::env::temp_dir().join(format!(
-            "fflag_check_json_negative_test_{}",
+            "prism_json_negative_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn flag_file_finding_ignores_allowlisted_only_json() {
         let root = std::env::temp_dir().join(format!(
-            "fflag_check_json_allowlisted_test_{}",
+            "prism_json_allowlisted_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -1687,7 +1687,7 @@ mod tests {
     /// and the temp dir (caller cleans up).
     fn make_synthetic_pe(tag: &str, markers: &[&[u8]]) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "fflag_check_fp_test_{}_{}",
+            "prism_fp_test_{}_{}",
             std::process::id(),
             tag
         ));
@@ -1757,7 +1757,7 @@ mod tests {
     #[test]
     fn fingerprint_rejects_random_pe() {
         let dir =
-            std::env::temp_dir().join(format!("fflag_check_fp_neg_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("prism_fp_neg_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("benign.exe");
         let mut bytes: Vec<u8> = Vec::with_capacity(8 * 1024);
@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn fingerprint_finds_marker_across_chunk_boundary() {
         let dir = std::env::temp_dir().join(format!(
-            "fflag_check_fp_boundary_test_{}",
+            "prism_fp_boundary_test_{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1808,7 +1808,7 @@ mod tests {
 
     #[test]
     fn fingerprint_returns_none_on_missing_file() {
-        let path = std::env::temp_dir().join("fflag_check_does_not_exist.exe");
+        let path = std::env::temp_dir().join("prism_does_not_exist.exe");
         assert!(pe_content_fingerprint(&path).is_none());
     }
 

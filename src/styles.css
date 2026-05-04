@@ -156,6 +156,46 @@ button {
 }
 
 /* ——————————————————————————————————————————————————————————————
+   Imported-report badge (toolbar) — signals the displayed report came
+   from a JSON file rather than a live scan, plus signature/staleness
+   tone via colour.
+   —————————————————————————————————————————————————————————————— */
+
+.import-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--surface);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.import-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.import-badge--ok { color: var(--clean); border-color: rgba(163, 230, 53, 0.35); }
+.import-badge--ok .import-badge__dot { background: var(--clean); }
+
+.import-badge--warn { color: var(--warn); border-color: rgba(245, 165, 36, 0.35); }
+.import-badge--warn .import-badge__dot { background: var(--warn); }
+
+.import-badge--danger { color: var(--danger); border-color: rgba(244, 63, 94, 0.4); }
+.import-badge--danger .import-badge__dot { background: var(--danger); }
+
+/* ——————————————————————————————————————————————————————————————
    Buttons
    —————————————————————————————————————————————————————————————— */
 

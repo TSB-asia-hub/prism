@@ -46,7 +46,7 @@ pub fn save_report(report: &ScanReport, target_path: Option<&str>) -> Result<Str
                     .map_err(|e| format!("Could not create desktop directory: {}", e))?;
             }
             let timestamp = report.timestamp.format("%Y%m%d_%H%M%S").to_string();
-            desktop.join(format!("FlagCheck_Report_{}.json", timestamp))
+            desktop.join(format!("Prism_Report_{}.json", timestamp))
         }
     };
 
