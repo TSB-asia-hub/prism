@@ -941,13 +941,18 @@ fn find_roblox_process() -> Option<RobloxProcess> {
     );
     sys.refresh_all();
 
-    let name_hint = "robloxplayerbeta";
+    // Match every executable name a real Roblox player can run under. Older
+    // installs / Bloxstrap / Fishstrap launch `RobloxPlayerBeta.exe`; the
+    // Microsoft Store / UWP build can ship as `Roblox.exe`; some Hyperion-
+    // protected builds drop the "Beta" suffix. Studio is intentionally not
+    // included — this scanner is for the player runtime.
+    let name_hints: [&str; 3] = ["robloxplayerbeta", "robloxplayer", "roblox.exe"];
 
     let mut best: Option<RobloxProcess> = None;
 
     for (pid, process) in sys.processes() {
         let name = process.name().to_string_lossy().to_lowercase();
-        if !name.contains(name_hint) {
+        if !name_hints.iter().any(|hint| name.contains(hint)) {
             continue;
         }
         let exe_path = process.exe().map(|p| p.to_string_lossy().to_string());
@@ -3360,10 +3365,14 @@ mod windows_impl {
         let proc = match find_roblox_process() {
             Some(p) => p,
             None => {
+                // No Roblox process means the memory scan never executed —
+                // calling that "Clean" would falsely advertise a passing
+                // verdict over zero coverage. Emit Inconclusive so the
+                // operator knows to launch Roblox and rescan.
                 return vec![ScanFinding::new(
                     "memory_scanner",
-                    ScanVerdict::Clean,
-                    "Roblox process not found - memory scan skipped",
+                    ScanVerdict::Inconclusive,
+                    "Memory scan skipped: no Roblox process running. Launch Roblox (RobloxPlayerBeta.exe / Roblox.exe) and rescan.",
                     None,
                 )];
             }
