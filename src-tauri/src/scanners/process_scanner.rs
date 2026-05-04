@@ -191,6 +191,15 @@ mod tests {
     }
 
     #[test]
+    fn bootstrapper_tokens_are_specific() {
+        assert!(contains_token("Froststrap.exe", "froststrap"));
+        assert!(contains_token("Homiestrap.exe", "homiestrap"));
+        assert!(contains_token("Luczystrap Updater", "luczystrap"));
+        assert!(!contains_token("generic-strap-helper.exe", "homiestrap"));
+        assert!(!contains_token("velcro-strap-organizer.exe", "velostrap"));
+    }
+
+    #[test]
     fn player_gate_excludes_crashhandler_and_studio() {
         assert!(is_roblox_player_process("robloxplayerbeta.exe"));
         assert!(!is_roblox_player_process("robloxcrashhandler.exe"));
