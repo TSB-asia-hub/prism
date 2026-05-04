@@ -1,6 +1,7 @@
 import { Component, type KeyboardEvent as ReactKeyboardEvent, ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { save as showSaveDialog } from "@tauri-apps/plugin-dialog";
 import type { ScanFinding, ScanReport, ScanVerdict } from "./types";
 
 // Version is wired in at build time from package.json by Vite's __APP_VERSION__
@@ -40,11 +41,11 @@ type ScanProgressEvent =
   | { kind: "started"; scanner: string }
   | { kind: "done"; scanner: string; findings: number }
   | {
-      kind: "heartbeat";
-      scanner: string;
-      regions_scanned: number;
-      bytes_scanned: number;
-    }
+    kind: "heartbeat";
+    scanner: string;
+    regions_scanned: number;
+    bytes_scanned: number;
+  }
   | { kind: "errored"; scanner: string; message: string };
 
 function emptyProgress(): ProgressMap {
@@ -201,11 +202,30 @@ function AppInner() {
     }
     setExportInFlight(true);
     try {
+      // Prompt for the destination first via the OS Save-As dialog so the
+      // user can pick any directory + filename. Default the suggested name
+      // to the legacy timestamped pattern. `save` returns null when the
+      // user cancels, in which case we silently abort without surfacing an
+      // error toast.
+      const ts = new Date(report.timestamp)
+        .toISOString()
+        .replace(/[-:]/g, "")
+        .replace(/\..+/, "")
+        .replace("T", "_");
+      const chosenPath = await showSaveDialog({
+        title: "Save scan report",
+        defaultPath: `FlagCheck_Report_${ts}.json`,
+        filters: [{ name: "JSON report", extensions: ["json"] }],
+      });
+      if (!chosenPath) {
+        setExportInFlight(false);
+        return;
+      }
       // The backend re-runs scanners and signs in-memory; we deliberately
       // do NOT pass the on-screen report here. This means the saved file
       // reflects the current machine state at export time, not whatever
       // (potentially tampered) report the webview is holding.
-      const path = await invoke<string>("save_report");
+      const path = await invoke<string>("save_report", { path: chosenPath });
       setToast({ msg: `Report saved → ${path}`, kind: "success" });
     } catch (err) {
       setToast({ msg: `Export failed: ${String(err)}`, kind: "error" });
@@ -753,12 +773,86 @@ const FindingRow = memo(function FindingRow({
           {/* Only render the inner content when open. The outer
               .row__details box is kept unconditionally so the CSS
               max-height transition still has something to animate. */}
-          {open ? (f.details ?? "No additional details.") : null}
+          {open ? <FindingDetails details={f.details} /> : null}
         </div>
       </div>
     </div>
   );
 });
+
+/* ——————————————————————————————————————————————————————————— */
+
+// Parse a finding's `details` string into a list of {label, value} pairs so
+// the UI can render them as a clean two-column grid instead of a single
+// `Key: foo | Key: bar | Key: baz` line. Backend scanners use either ` | `
+// (memory_scanner) or `, ` (file_scanner) as the separator between KV
+// segments — for the comma form we only split when the next segment looks
+// like a `Capitalized-key:` so commas inside paths or notes don't shred
+// values. Anything that doesn't parse as KV is rendered as a freeform note.
+type DetailField = { label: string; value: string };
+
+function parseFindingDetails(details: string): {
+  fields: DetailField[];
+  freeform: string | null;
+} {
+  const trimmed = details.trim();
+  if (!trimmed) return { fields: [], freeform: null };
+
+  const segments = trimmed.includes(" | ")
+    ? trimmed.split(" | ")
+    : trimmed.split(/, (?=[A-Z][\w .-]*?:\s)/);
+
+  const fields: DetailField[] = [];
+  const leftovers: string[] = [];
+  for (const raw of segments) {
+    const seg = raw.trim();
+    if (!seg) continue;
+    const colon = seg.indexOf(":");
+    if (colon <= 0 || colon > 40) {
+      leftovers.push(seg);
+      continue;
+    }
+    const label = seg.slice(0, colon).trim();
+    const value = seg.slice(colon + 1).trim();
+    if (!label || !value || /\s/.test(label) && !/^[A-Z][\w .-]*$/.test(label)) {
+      leftovers.push(seg);
+      continue;
+    }
+    fields.push({ label, value });
+  }
+  return {
+    fields,
+    freeform: leftovers.length ? leftovers.join(" · ") : null,
+  };
+}
+
+function FindingDetails({ details }: { details: string | null }) {
+  const parsed = useMemo(
+    () => (details ? parseFindingDetails(details) : null),
+    [details],
+  );
+  if (!details || !parsed) {
+    return <span className="row__details-empty">No additional details.</span>;
+  }
+  if (parsed.fields.length === 0) {
+    return <span className="row__details-freeform">{details}</span>;
+  }
+  return (
+    <>
+      <dl className="row__details-grid">
+        {parsed.fields.map((f, i) => (
+          <div className="row__details-row" key={`${f.label}-${i}`}>
+            <dt className="row__details-key">{f.label}</dt>
+            <dd className="row__details-value">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {parsed.freeform && (
+        <p className="row__details-freeform">{parsed.freeform}</p>
+      )}
+    </>
+  );
+}
 
 /* ——————————————————————————————————————————————————————————— */
 

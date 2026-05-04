@@ -19,12 +19,15 @@ pub async fn run_scan(app: tauri::AppHandle) -> Result<ScanReport, String> {
 /// Save a freshly-generated, in-memory-signed report to disk. The frontend
 /// CANNOT supply the report content — `save_report` re-runs scanners and
 /// signs the result internally, so a tampered webview cannot persist a
-/// forged "Clean" report. Returns the file path where the report was saved.
+/// forged "Clean" report. The `path` argument lets the frontend pass the
+/// user's chosen destination from a native Save-As dialog; if it's `None`
+/// or empty the report falls back to a timestamped file on the desktop.
+/// Returns the absolute file path where the report was actually saved.
 #[tauri::command]
-pub async fn save_report() -> Result<String, String> {
+pub async fn save_report(path: Option<String>) -> Result<String, String> {
     let findings = scanners::run_all_scans().await;
     let report = report_generator::generate_report(findings);
-    report_generator::save_report(&report)
+    report_generator::save_report(&report, path.as_deref())
 }
 
 /// Validate a report's HMAC signature AND its freshness window. A report
