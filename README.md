@@ -80,7 +80,7 @@ Reports are saved (or to the location chosen via the Save-As dialog) as `Prism_R
 
 ### Limits of the current trust model
 
-- **The HMAC key lives in the binary.** A player who reverse-engineers their copy can forge reports verifiable against THAT build. Per-build randomization makes forgery non-portable across releases, but it is not a replacement for server-side validation. For high-stakes tournaments, the validation step should happen on a TSBCC-controlled server using a server-side key.
+- **The HMAC key lives in the binary.** A player who reverse-engineers their copy can forge reports verifiable against THAT build. Per-build randomization makes forgery non-portable across releases, but it is not a replacement for server-side validation. For high-stakes tournaments, the validation step should happen on a TSB Competitive-controlled server using a server-side key.
 - **The machine ID is editable** by an admin user (Windows registry) or a privileged macOS user. Treat machine_id as a soft fingerprint, not an attestation.
 - **`save_report` re-runs scanners in the backend** rather than trusting whatever the webview displays — so a tampered frontend can't get a forged report signed and saved. A player would have to patch the binary itself, which is detectable by checksumming the released build.
 
@@ -108,14 +108,14 @@ npm run tauri build
 
 **macOS output:**
 ```
-src-tauri/target/release/bundle/macos/TSBCC FFlag Scanner.app
-src-tauri/target/release/bundle/dmg/TSBCC FFlag Scanner_<version>_aarch64.dmg
+src-tauri/target/release/bundle/macos/TSB Competitive FFlag Scanner.app
+src-tauri/target/release/bundle/dmg/TSB Competitive FFlag Scanner_<version>_aarch64.dmg
 ```
 
 **Windows output:**
 ```
-src-tauri/target/release/bundle/msi/TSBCC FFlag Scanner_<version>_x64.msi
-src-tauri/target/release/bundle/nsis/TSBCC FFlag Scanner_<version>_x64-setup.exe
+src-tauri/target/release/bundle/msi/TSB Competitive FFlag Scanner_<version>_x64.msi
+src-tauri/target/release/bundle/nsis/TSB Competitive FFlag Scanner_<version>_x64-setup.exe
 ```
 
 CI publishes one portable Windows scanner `.exe` (no installer) plus macOS Intel and Apple Silicon `.dmg`s on every `v*` tag.
