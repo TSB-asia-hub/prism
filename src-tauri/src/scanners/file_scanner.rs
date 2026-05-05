@@ -218,6 +218,71 @@ fn is_current_executable_path(path: &Path, current_exe: Option<&Path>) -> bool {
     same_path_for_scan_exclusion(&candidate, current_exe)
 }
 
+fn is_prism_release_filename(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower == "prism.exe"
+        || (lower.starts_with("prism-v") && lower.ends_with("-windows-portable.exe"))
+}
+
+fn file_contains_all_markers(path: &Path, markers: &[&[u8]]) -> bool {
+    if markers.is_empty() {
+        return false;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+
+    let max_marker_len = markers.iter().map(|m| m.len()).max().unwrap_or(0);
+    if max_marker_len == 0 {
+        return false;
+    }
+    let overlap = max_marker_len.saturating_sub(1);
+    let mut hits = vec![false; markers.len()];
+
+    const CHUNK: usize = 64 * 1024;
+    let mut buf = vec![0u8; overlap + CHUNK];
+    let mut filled_tail = 0usize;
+
+    loop {
+        let n = match file.read(&mut buf[filled_tail..]) {
+            Ok(0) => 0,
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let valid = filled_tail + n;
+        if valid == 0 {
+            break;
+        }
+        let haystack = &buf[..valid];
+
+        for (i, marker) in markers.iter().enumerate() {
+            if !hits[i] && memchr::memmem::find(haystack, marker).is_some() {
+                hits[i] = true;
+            }
+        }
+        if hits.iter().all(|&hit| hit) {
+            return true;
+        }
+        if n == 0 {
+            break;
+        }
+
+        let keep = overlap.min(valid);
+        if keep > 0 {
+            buf.copy_within(valid - keep..valid, 0);
+        }
+        filled_tail = keep;
+    }
+
+    false
+}
+
+fn is_prism_release_artifact(path: &Path, file_name: &str) -> bool {
+    is_prism_release_filename(file_name)
+        && file_starts_with_mz(path)
+        && file_contains_all_markers(path, &[b"Prism", b"TSBCC", b"tournament integrity"])
+}
+
 #[cfg(target_os = "windows")]
 fn same_path_for_scan_exclusion(left: &Path, right: &Path) -> bool {
     left.to_string_lossy()
@@ -792,6 +857,10 @@ fn process_file_entry(
 
     let file_name_os = entry.file_name().to_string_lossy().to_string();
     let file_name = file_name_os.as_str();
+    if is_prism_release_artifact(entry.path(), file_name) {
+        return out;
+    }
+
     let file_ext = lower_ext(entry.path());
 
     // Flag-content scan for JSON / text-shaped configs. The scanner only
@@ -1518,6 +1587,40 @@ mod tests {
         std::fs::write(&other, b"MZ\x90\x00").unwrap();
         assert!(!is_current_executable_path(&other, Some(&current)));
         assert!(!is_current_executable_path(&exe, None));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prism_release_artifact_exclusion_requires_name_and_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "prism_release_artifact_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let prism = root.join("Prism-v0.7.2-windows-portable.exe");
+        std::fs::write(
+            &prism,
+            b"MZ\x90\x00Prism\0TSBCC\0tournament integrity\0found singleton [cached]\0found singleton [pattern]\0fflag [{}] has unregistered getset, skipping",
+        )
+        .unwrap();
+
+        assert!(is_prism_release_artifact(
+            &prism,
+            "Prism-v0.7.2-windows-portable.exe"
+        ));
+        assert!(!is_prism_release_artifact(&prism, "renamed-tool.exe"));
+
+        let renamed_tool = root.join("Prism-v9.9.9-windows-portable.exe");
+        std::fs::write(
+            &renamed_tool,
+            b"MZ\x90\x00found singleton [cached]\0found singleton [pattern]\0fflag [{}] has unregistered getset, skipping",
+        )
+        .unwrap();
+        assert!(!is_prism_release_artifact(
+            &renamed_tool,
+            "Prism-v9.9.9-windows-portable.exe"
+        ));
 
         std::fs::remove_dir_all(&root).ok();
     }
