@@ -175,7 +175,20 @@ pub static INJECTOR_SIBLING_CONFIG_FILES: &[&str] = &["fflags.json", "address.js
 pub struct BinaryFingerprint {
     pub display_name: &'static str,
     pub note: &'static str,
-    pub required_markers: &'static [&'static [u8]],
+    pub required_markers: &'static [EncodedMarker],
+}
+
+/// A binary marker stored in encoded form so Prism's own release executable
+/// does not contain the exact byte signatures it scans other binaries for.
+pub struct EncodedMarker {
+    pub bytes: &'static [u8],
+    pub xor_key: u8,
+}
+
+impl EncodedMarker {
+    pub fn decode(&self) -> Vec<u8> {
+        self.bytes.iter().map(|byte| byte ^ self.xor_key).collect()
+    }
 }
 
 /// Content fingerprints for known tools. Strings drawn from the recovered
@@ -190,9 +203,29 @@ pub static KNOWN_TOOL_BINARY_FINGERPRINTS: &[BinaryFingerprint] = &[
             // Three Lorno-specific log strings emitted by find_singleton and
             // the flag-application loop. All three together are unique to
             // this codebase.
-            b"found singleton [cached]",
-            b"found singleton [pattern]",
-            b"fflag [{}] has unregistered getset, skipping",
+            EncodedMarker {
+                bytes: &[
+                    0xc3, 0xca, 0xd0, 0xcb, 0xc1, 0x85, 0xd6, 0xcc, 0xcb, 0xc2, 0xc9, 0xc0, 0xd1,
+                    0xca, 0xcb, 0x85, 0xfe, 0xc6, 0xc4, 0xc6, 0xcd, 0xc0, 0xc1, 0xf8,
+                ],
+                xor_key: 0xa5,
+            },
+            EncodedMarker {
+                bytes: &[
+                    0xc3, 0xca, 0xd0, 0xcb, 0xc1, 0x85, 0xd6, 0xcc, 0xcb, 0xc2, 0xc9, 0xc0, 0xd1,
+                    0xca, 0xcb, 0x85, 0xfe, 0xd5, 0xc4, 0xd1, 0xd1, 0xc0, 0xd7, 0xcb, 0xf8,
+                ],
+                xor_key: 0xa5,
+            },
+            EncodedMarker {
+                bytes: &[
+                    0xc3, 0xc3, 0xc9, 0xc4, 0xc2, 0x85, 0xfe, 0xde, 0xd8, 0xf8, 0x85, 0xcd, 0xc4,
+                    0xd6, 0x85, 0xd0, 0xcb, 0xd7, 0xc0, 0xc2, 0xcc, 0xd6, 0xd1, 0xc0, 0xd7, 0xc0,
+                    0xc1, 0x85, 0xc2, 0xc0, 0xd1, 0xd6, 0xc0, 0xd1, 0x89, 0x85, 0xd6, 0xce, 0xcc,
+                    0xd5, 0xd5, 0xcc, 0xcb, 0xc2,
+                ],
+                xor_key: 0xa5,
+            },
         ],
     },
     BinaryFingerprint {
@@ -203,7 +236,15 @@ pub static KNOWN_TOOL_BINARY_FINGERPRINTS: &[BinaryFingerprint] = &[
             // builds. Survives string-stripping because it's in a header.
             // Two slightly different substrings to handle path-separator
             // and trailing-component variation across rebuilds.
-            b"\\fflag-manager\\bld\\release\\bin\\odessa.pdb",
+            EncodedMarker {
+                bytes: &[
+                    0xf9, 0xc3, 0xc3, 0xc9, 0xc4, 0xc2, 0x88, 0xc8, 0xc4, 0xcb, 0xc4, 0xc2, 0xc0,
+                    0xd7, 0xf9, 0xc7, 0xc9, 0xc1, 0xf9, 0xd7, 0xc0, 0xc9, 0xc0, 0xc4, 0xd6, 0xc0,
+                    0xf9, 0xc7, 0xcc, 0xcb, 0xf9, 0xca, 0xc1, 0xc0, 0xd6, 0xd6, 0xc4, 0x8b, 0xd5,
+                    0xc1, 0xc7,
+                ],
+                xor_key: 0xa5,
+            },
         ],
     },
 ];

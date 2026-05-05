@@ -254,11 +254,15 @@ fn hash_file_sha256(path: &Path) -> Option<String> {
 /// still found. Bails on any I/O error (no panic, no partial result).
 fn pe_content_fingerprint(path: &Path) -> Option<&'static BinaryFingerprint> {
     let mut file = std::fs::File::open(path).ok()?;
+    let decoded_markers: Vec<Vec<Vec<u8>>> = KNOWN_TOOL_BINARY_FINGERPRINTS
+        .iter()
+        .map(|fp| fp.required_markers.iter().map(|m| m.decode()).collect())
+        .collect();
 
     // Per-fingerprint per-marker hit tracking. Indexed [fp][marker].
-    let mut hits: Vec<Vec<bool>> = KNOWN_TOOL_BINARY_FINGERPRINTS
+    let mut hits: Vec<Vec<bool>> = decoded_markers
         .iter()
-        .map(|fp| vec![false; fp.required_markers.len()])
+        .map(|markers| vec![false; markers.len()])
         .collect();
     if hits.is_empty() {
         return None;
@@ -266,9 +270,9 @@ fn pe_content_fingerprint(path: &Path) -> Option<&'static BinaryFingerprint> {
 
     // Overlap = longest marker minus 1, so a marker spanning two reads is
     // still wholly inside the (overlap || chunk) buffer on the second read.
-    let max_marker_len = KNOWN_TOOL_BINARY_FINGERPRINTS
+    let max_marker_len = decoded_markers
         .iter()
-        .flat_map(|fp| fp.required_markers.iter())
+        .flat_map(|markers| markers.iter())
         .map(|m| m.len())
         .max()
         .unwrap_or(0);
@@ -293,8 +297,8 @@ fn pe_content_fingerprint(path: &Path) -> Option<&'static BinaryFingerprint> {
         }
         let haystack = &buf[..valid];
 
-        for (fi, fp) in KNOWN_TOOL_BINARY_FINGERPRINTS.iter().enumerate() {
-            for (mi, marker) in fp.required_markers.iter().enumerate() {
+        for (fi, markers) in decoded_markers.iter().enumerate() {
+            for (mi, marker) in markers.iter().enumerate() {
                 if hits[fi][mi] {
                     continue;
                 }
@@ -303,7 +307,7 @@ fn pe_content_fingerprint(path: &Path) -> Option<&'static BinaryFingerprint> {
                 }
             }
             if hits[fi].iter().all(|&h| h) {
-                return Some(fp);
+                return KNOWN_TOOL_BINARY_FINGERPRINTS.get(fi);
             }
         }
 
@@ -634,10 +638,7 @@ fn text_line_has_clean_flag_assignment(line: &str) -> bool {
         .strip_prefix('"')
         .or_else(|| line.strip_prefix('\''))
         .unwrap_or(line);
-    let token_len = line
-        .bytes()
-        .take_while(|b| is_ident_byte(*b))
-        .count();
+    let token_len = line.bytes().take_while(|b| is_ident_byte(*b)).count();
     if token_len == 0 {
         return false;
     }
@@ -668,12 +669,7 @@ fn text_has_clean_flag_file_shape(content: &str) -> bool {
 fn ext_is_flag_text_candidate(ext: Option<&str>) -> bool {
     matches!(
         ext,
-        Some("json")
-            | Some("txt")
-            | Some("cfg")
-            | Some("conf")
-            | Some("config")
-            | Some("ini")
+        Some("json") | Some("txt") | Some("cfg") | Some("conf") | Some("config") | Some("ini")
     )
 }
 
@@ -1451,8 +1447,7 @@ mod tests {
     #[test]
     fn hash_file_sha256_matches_known_value() {
         // "abc" → SHA-256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-        let dir =
-            std::env::temp_dir().join(format!("prism_hash_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("prism_hash_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("abc.bin");
         {
@@ -1511,8 +1506,7 @@ mod tests {
 
     #[test]
     fn self_scan_exclusion_matches_current_exe_path() {
-        let root =
-            std::env::temp_dir().join(format!("prism_self_scan_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("prism_self_scan_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let exe = root.join("TSBCC-FFlag-Scanner-v0.6.12-windows-portable.exe");
         std::fs::write(&exe, b"MZ\x90\x00").unwrap();
@@ -1552,8 +1546,7 @@ mod tests {
     fn sibling_config_pattern_is_detected_on_disk() {
         // Build a fake injector layout in a fresh temp dir and verify that
         // hash_file_sha256 + sibling-file logic would pick it up.
-        let root =
-            std::env::temp_dir().join(format!("prism_sibling_test_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("prism_sibling_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let exe = root.join("tool.exe");
@@ -1573,8 +1566,7 @@ mod tests {
 
     #[test]
     fn injector_payload_detail_reports_lorno_flags_and_singleton_cache() {
-        let root =
-            std::env::temp_dir().join(format!("prism_payload_test_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("prism_payload_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let exe = root.join("LornoFix.exe");
@@ -1641,10 +1633,8 @@ mod tests {
 
     #[test]
     fn flag_file_finding_ignores_nested_or_wrapped_flag_json() {
-        let root = std::env::temp_dir().join(format!(
-            "prism_json_nested_test_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("prism_json_nested_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("profile.json");
         std::fs::write(
@@ -1660,10 +1650,8 @@ mod tests {
 
     #[test]
     fn flag_file_finding_ignores_json_with_non_fflag_keys() {
-        let root = std::env::temp_dir().join(format!(
-            "prism_json_wrapper_test_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("prism_json_wrapper_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("history.json");
         std::fs::write(
@@ -1679,10 +1667,8 @@ mod tests {
 
     #[test]
     fn flag_file_finding_ignores_disabled_and_arbitrary_string_mentions() {
-        let root = std::env::temp_dir().join(format!(
-            "prism_json_negative_test_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("prism_json_negative_test_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("notes.json");
         std::fs::write(
@@ -1775,11 +1761,8 @@ mod tests {
     /// markers padded with random PE-looking filler. Returns the file path
     /// and the temp dir (caller cleans up).
     fn make_synthetic_pe(tag: &str, markers: &[&[u8]]) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "prism_fp_test_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prism_fp_test_{}_{}", std::process::id(), tag));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("blob.exe");
 
@@ -1845,8 +1828,7 @@ mod tests {
     /// non-cheat context must not match.
     #[test]
     fn fingerprint_rejects_random_pe() {
-        let dir =
-            std::env::temp_dir().join(format!("prism_fp_neg_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("prism_fp_neg_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("benign.exe");
         let mut bytes: Vec<u8> = Vec::with_capacity(8 * 1024);
@@ -1862,10 +1844,8 @@ mod tests {
     /// Markers that straddle the 64 KiB chunk boundary must still be found.
     #[test]
     fn fingerprint_finds_marker_across_chunk_boundary() {
-        let dir = std::env::temp_dir().join(format!(
-            "prism_fp_boundary_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prism_fp_boundary_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("split.exe");
 
@@ -1910,16 +1890,17 @@ mod tests {
                 fp.display_name
             );
             for m in fp.required_markers {
+                let marker = m.decode();
                 assert!(
-                    !m.is_empty(),
+                    !marker.is_empty(),
                     "fingerprint for {} has empty marker",
                     fp.display_name
                 );
                 assert!(
-                    m.len() >= 8,
+                    marker.len() >= 8,
                     "fingerprint marker for {} too short ({} bytes) — risk of false positives",
                     fp.display_name,
-                    m.len()
+                    marker.len()
                 );
             }
         }
