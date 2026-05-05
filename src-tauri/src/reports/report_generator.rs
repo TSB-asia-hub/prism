@@ -89,3 +89,85 @@ fn get_desktop_path() -> Option<PathBuf> {
             .map(|p| PathBuf::from(p).join("Desktop"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ScanFinding, ScanReport, ScanVerdict};
+    use chrono::{Duration, Utc};
+
+    fn test_finding(verdict: ScanVerdict) -> ScanFinding {
+        ScanFinding::new("test_scanner", verdict, "test finding", None)
+    }
+
+    fn unique_temp_report_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "prism-report-test-{}-{}-{}.json",
+            name,
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    #[test]
+    fn generate_report_computes_verdict_and_signs_output() {
+        let report = generate_report(vec![
+            test_finding(ScanVerdict::Clean),
+            test_finding(ScanVerdict::Suspicious),
+        ]);
+
+        assert_eq!(report.overall_verdict, ScanVerdict::Suspicious);
+        assert_eq!(report.findings.len(), 2);
+        assert!(report.verify());
+    }
+
+    #[test]
+    fn save_report_refuses_invalid_signature() {
+        let report = ScanReport::new();
+        let path = unique_temp_report_path("invalid-signature");
+
+        let err = save_report(&report, Some(&path.to_string_lossy()))
+            .expect_err("unsigned reports must not be saved");
+
+        assert!(err.contains("HMAC signature is invalid"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_report_writes_signed_report_to_requested_path() {
+        let report = generate_report(vec![test_finding(ScanVerdict::Clean)]);
+        let path = unique_temp_report_path("valid-signature");
+
+        let saved = save_report(&report, Some(&path.to_string_lossy()))
+            .expect("signed report should save");
+
+        assert_eq!(PathBuf::from(saved), path);
+        let saved_json = std::fs::read_to_string(&path).expect("report file should exist");
+        let decoded: ScanReport =
+            serde_json::from_str(&saved_json).expect("saved report JSON should decode");
+        assert!(decoded.verify());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_report_rejects_invalid_json_invalid_signature_and_stale_reports() {
+        assert!(validate_report("{not json").is_err());
+
+        let mut unsigned = ScanReport::new();
+        unsigned.hmac_signature = "00".repeat(32);
+        assert_eq!(validate_report(&unsigned.to_json()), Ok(false));
+
+        let mut stale = generate_report(vec![test_finding(ScanVerdict::Clean)]);
+        stale.timestamp = Utc::now() - Duration::minutes(31);
+        stale.sign();
+        assert_eq!(validate_report(&stale.to_json()), Ok(false));
+    }
+
+    #[test]
+    fn validate_report_accepts_fresh_signed_reports() {
+        let report = generate_report(vec![test_finding(ScanVerdict::Clean)]);
+
+        assert_eq!(validate_report(&report.to_json()), Ok(true));
+    }
+}

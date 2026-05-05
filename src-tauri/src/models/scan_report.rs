@@ -282,3 +282,90 @@ fn get_os_info() -> String {
     };
     format!("{} {} ({})", name, version, arch)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::scan_result::{ScanFinding, ScanVerdict};
+    use chrono::Duration;
+
+    fn test_finding(verdict: ScanVerdict) -> ScanFinding {
+        ScanFinding::new("test_scanner", verdict, "test finding", None)
+    }
+
+    #[test]
+    fn compute_verdict_promotes_highest_severity() {
+        let mut report = ScanReport::new();
+        report.add_finding(test_finding(ScanVerdict::Clean));
+        report.add_finding(test_finding(ScanVerdict::Inconclusive));
+        report.add_finding(test_finding(ScanVerdict::Suspicious));
+
+        assert_eq!(report.compute_verdict(), ScanVerdict::Suspicious);
+
+        report.add_finding(test_finding(ScanVerdict::Flagged));
+        assert_eq!(report.compute_verdict(), ScanVerdict::Flagged);
+    }
+
+    #[test]
+    fn compute_verdict_surfaces_inconclusive_when_nothing_stronger_exists() {
+        let mut report = ScanReport::new();
+        report.add_finding(test_finding(ScanVerdict::Clean));
+        report.add_finding(test_finding(ScanVerdict::Inconclusive));
+
+        assert_eq!(report.compute_verdict(), ScanVerdict::Inconclusive);
+    }
+
+    #[test]
+    fn signed_report_verifies_and_tampering_breaks_signature() {
+        let mut report = ScanReport::new();
+        report.add_finding(test_finding(ScanVerdict::Clean));
+        report.overall_verdict = report.compute_verdict();
+        report.sign();
+
+        assert!(report.verify());
+
+        report.findings.push(test_finding(ScanVerdict::Flagged));
+        assert!(!report.verify());
+    }
+
+    #[test]
+    fn malformed_or_missing_signature_is_rejected() {
+        let mut report = ScanReport::new();
+        assert!(!report.verify());
+
+        report.hmac_signature = "not hex".to_string();
+        assert!(!report.verify());
+    }
+
+    #[test]
+    fn verify_fresh_rejects_stale_and_future_reports() {
+        let mut stale = ScanReport::new();
+        stale.timestamp = Utc::now() - Duration::seconds(REPORT_MAX_AGE_SECONDS + 1);
+        stale.sign();
+        assert!(stale
+            .verify_fresh()
+            .expect_err("stale report should fail freshness")
+            .contains("old"));
+
+        let mut future = ScanReport::new();
+        future.timestamp = Utc::now() + Duration::seconds(180);
+        future.sign();
+        assert!(future
+            .verify_fresh()
+            .expect_err("future report should fail clock-skew check")
+            .contains("future"));
+    }
+
+    #[test]
+    fn report_json_round_trips_after_signing() {
+        let mut report = ScanReport::new();
+        report.add_finding(test_finding(ScanVerdict::Suspicious));
+        report.overall_verdict = report.compute_verdict();
+        report.sign();
+
+        let decoded: ScanReport =
+            serde_json::from_str(&report.to_json()).expect("signed report JSON should decode");
+        assert_eq!(decoded.overall_verdict, ScanVerdict::Suspicious);
+        assert!(decoded.verify());
+    }
+}

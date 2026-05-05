@@ -48,7 +48,7 @@ type ScanProgressEvent =
   }
   | { kind: "errored"; scanner: string; message: string };
 
-function emptyProgress(): ProgressMap {
+export function emptyProgress(): ProgressMap {
   return Object.fromEntries(
     SCANNERS.map((s) => [s.id, { state: "pending" as const }]),
   );
@@ -60,7 +60,7 @@ type Toast = { msg: string; kind: "info" | "success" | "error" };
 // is missing, the app is running in a plain browser (e.g. `npm run dev`
 // opened at http://localhost:1420) rather than the Tauri webview, and
 // `invoke` would throw "Cannot read properties of undefined".
-function hasTauriRuntime(): boolean {
+export function hasTauriRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof (window as unknown as { __TAURI_INTERNALS__?: unknown })
@@ -73,7 +73,7 @@ function hasTauriRuntime(): boolean {
 // `details` field so two findings with identical module+timestamp+description
 // (which can happen on batch scans hitting Utc::now() in the same tick)
 // still get distinct keys when their details differ.
-function findingKey(f: ScanFinding): string {
+export function findingKey(f: ScanFinding): string {
   return `${f.module}|${f.timestamp}|${f.description}|${f.details ?? ""}`;
 }
 
@@ -496,7 +496,7 @@ function Toolbar({
 // Tooltip text for the Import badge — explains the signature / staleness
 // state and shows the source file. Splitting this out keeps the JSX
 // readable when the verdict-token logic above changes.
-function importBadgeTitle(meta: ImportMeta): string {
+export function importBadgeTitle(meta: ImportMeta): string {
   const sig = meta.signatureValid ? "signature OK" : "signature INVALID";
   const age =
     meta.ageSeconds < 60
@@ -510,7 +510,7 @@ function importBadgeTitle(meta: ImportMeta): string {
 
 /* ——————————————————————————————————————————————————————————— */
 
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KiB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
@@ -828,7 +828,7 @@ function Workarea({
 // render a section header above each cluster (Flagged → Suspicious →
 // Inconclusive → Clean). The input arrives sorted by verdict rank from
 // `ordered`, so this is a single linear pass — no extra sort needed.
-function groupByVerdict(
+export function groupByVerdict(
   findings: ScanFinding[],
 ): { verdict: ScanVerdict; items: ScanFinding[] }[] {
   const groups: { verdict: ScanVerdict; items: ScanFinding[] }[] = [];
@@ -956,7 +956,7 @@ const FindingRow = memo(function FindingRow({
 // values. Anything that doesn't parse as KV is rendered as a freeform note.
 type DetailField = { label: string; value: string };
 
-function parseFindingDetails(details: string): {
+export function parseFindingDetails(details: string): {
   fields: DetailField[];
   freeform: string | null;
 } {
@@ -1120,17 +1120,17 @@ export default function App() {
 
 /* ——————————————————————————————————————————————————————————— */
 
-function truncate(s: string, n: number): string {
+export function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n) + "…";
 }
 
-function shortTime(iso: string): string {
+export function shortTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function relativeTime(d: Date): string {
+export function relativeTime(d: Date): string {
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
   if (diff < 5) return "just now";
   if (diff < 60) return `${diff}s ago`;
