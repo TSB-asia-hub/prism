@@ -32,7 +32,6 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
     "krampus",
     "arceus",
     "delta",
-    "codex",
     "trigon",
     "electron",
     "valyse",

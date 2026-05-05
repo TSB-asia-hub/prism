@@ -482,6 +482,25 @@ fn collect_json_flag_matches(
     }
 }
 
+fn json_has_clean_flag_file_shape(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(obj) => {
+            !obj.is_empty()
+                && obj.keys().all(|key| looks_like_fflag_key(key))
+                && obj.values().all(|value| {
+                    matches!(
+                        value,
+                        serde_json::Value::Bool(_)
+                            | serde_json::Value::Number(_)
+                            | serde_json::Value::String(_)
+                            | serde_json::Value::Null
+                    )
+                })
+        }
+        _ => false,
+    }
+}
+
 fn verdict_rank(verdict: &ScanVerdict) -> u8 {
     match verdict {
         ScanVerdict::Clean => 0,
@@ -605,32 +624,63 @@ fn text_flag_matches(content: &str) -> Vec<JsonFlagMatch> {
     matches
 }
 
+fn text_line_has_clean_flag_assignment(line: &str) -> bool {
+    let line = line.trim();
+    if line.is_empty() {
+        return true;
+    }
+
+    let line = line
+        .strip_prefix('"')
+        .or_else(|| line.strip_prefix('\''))
+        .unwrap_or(line);
+    let token_len = line
+        .bytes()
+        .take_while(|b| is_ident_byte(*b))
+        .count();
+    if token_len == 0 {
+        return false;
+    }
+
+    let token = &line[..token_len];
+    looks_like_fflag_key(token) && extract_text_flag_value(&line[token_len..]).is_some()
+}
+
+fn text_has_clean_flag_file_shape(content: &str) -> bool {
+    let mut meaningful_lines = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        meaningful_lines += 1;
+        if !text_line_has_clean_flag_assignment(trimmed) {
+            return false;
+        }
+    }
+    meaningful_lines > 0
+}
+
 /// Check whether a file path's extension or extension-less filename should
 /// be treated as a candidate for FFlag content scanning. The set covers the
 /// formats real injectors and config dumpers actually use: JSON config,
-/// .txt notes, .cfg / .ini key-value lists, .log dumps, and the
-/// extension-less files Windows displays as "File" (often dropped from
-/// share-sheet exports or saved-from-clipboard pastes).
+/// .txt notes, and .cfg / .ini key-value lists.
 fn ext_is_flag_text_candidate(ext: Option<&str>) -> bool {
     matches!(
         ext,
-        None | Some("json")
+        Some("json")
             | Some("txt")
             | Some("cfg")
             | Some("conf")
             | Some("config")
             | Some("ini")
-            | Some("log")
-            | Some("yml")
-            | Some("yaml")
-            | Some("env")
     )
 }
 
 /// General-purpose FFlag content scanner. Tries JSON parsing first (so a
 /// .txt that happens to be valid JSON still gets the structured-flag
-/// treatment), then falls back to a line-based text scan that captures
-/// `key: value` pairs around any FFlag-prefix identifier.
+/// treatment), then falls back to a line-based text scan. Both paths require
+/// the whole file to have an FFlag-only config shape.
 ///
 /// Cheap pre-filter: if the file body contains no FFlag-shaped prefix at
 /// all, bail before paying for serde-json or full tokenization. This keeps
@@ -645,6 +695,9 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
     let mut matches: Vec<JsonFlagMatch> = Vec::new();
     let mut source_kind = "Text";
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+        if !json_has_clean_flag_file_shape(&parsed) {
+            return None;
+        }
         collect_json_flag_matches(&parsed, "$", 0, &mut matches);
         if matches.is_empty() {
             return None;
@@ -654,6 +707,9 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
         }
     }
     if matches.is_empty() {
+        if !text_has_clean_flag_file_shape(&content) {
+            return None;
+        }
         matches = text_flag_matches(&content);
     }
     if matches.is_empty() {
@@ -742,9 +798,8 @@ fn process_file_entry(
     let file_name = file_name_os.as_str();
     let file_ext = lower_ext(entry.path());
 
-    // Flag-content scan for JSON / text-shaped configs (and extension-less
-    // files, which Windows displays as the bare "File" type and which are a
-    // common shape for hand-edited or share-sheet-exported flag dumps).
+    // Flag-content scan for JSON / text-shaped configs. The scanner only
+    // reports files whose whole body has an FFlag-only config shape.
     if ext_is_flag_text_candidate(file_ext.as_deref()) {
         if let Some(finding) = flag_file_finding(entry.path()) {
             let canon = entry
@@ -1040,9 +1095,9 @@ fn process_broad_batch(paths: &[PathBuf]) -> Vec<(PathBuf, ScanFinding)> {
         .collect()
 }
 
-/// Whole-system broad pass. Walks every drive root looking for FFlag-shaped
-/// content in text-shaped files (`.txt`, `.json`, `.cfg`, `.ini`, `.log`,
-/// `.yml`, `.env`, extensionless). Aggressively prunes system directories
+/// Whole-system broad pass. Walks every drive root looking for FFlag-only
+/// config content in text-shaped files (`.txt`, `.json`, `.cfg`, `.ini`).
+/// Aggressively prunes system directories
 /// and developer noise via `dir_name_should_skip`, caps total wall-clock
 /// time via `BROAD_SCAN_TIME_BUDGET`, and processes files in parallel
 /// batches. Results are deduped against `reported_paths` so a file already
@@ -1585,7 +1640,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_file_finding_reports_nested_flag_arrays() {
+    fn flag_file_finding_ignores_nested_or_wrapped_flag_json() {
         let root = std::env::temp_dir().join(format!(
             "prism_json_nested_test_{}",
             std::process::id()
@@ -1598,11 +1653,26 @@ mod tests {
         )
         .unwrap();
 
-        let finding = flag_file_finding(&path).expect("nested json flag finding");
-        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
-        let details = finding.details.as_deref().unwrap_or_default();
-        assert!(details.contains("DFIntDataSenderRate = -1"));
-        assert!(details.contains("$.profiles[0].flags[0].flag"));
+        assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_json_with_non_fflag_keys() {
+        let root = std::env::temp_dir().join(format!(
+            "prism_json_wrapper_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("history.json");
+        std::fs::write(
+            &path,
+            r#"{"path":"ClientAppSettings.json","DFIntS2PhysicsSenderRate":1}"#,
+        )
+        .unwrap();
+
+        assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -1674,6 +1744,25 @@ mod tests {
         std::fs::write(
             &path,
             "Tournament notes mention DFIntS2PhysicsSenderRate as a known bad flag name.",
+        )
+        .unwrap();
+
+        assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_text_with_non_fflag_lines() {
+        let root = std::env::temp_dir().join(format!(
+            "fflag_check_text_wrapper_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(
+            &path,
+            "Old config copied from chat:\nDFIntS2PhysicsSenderRate: 1\n",
         )
         .unwrap();
 

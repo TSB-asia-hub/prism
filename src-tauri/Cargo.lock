@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "prism"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aho-corasick",
  "chrono",

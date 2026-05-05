@@ -191,6 +191,11 @@ mod tests {
     }
 
     #[test]
+    fn openai_codex_is_not_a_known_tool_token() {
+        assert!(!KNOWN_PROCESS_NAMES.contains(&"codex"));
+    }
+
+    #[test]
     fn bootstrapper_tokens_are_specific() {
         assert!(contains_token("Froststrap.exe", "froststrap"));
         assert!(contains_token("Homiestrap.exe", "homiestrap"));

@@ -27,6 +27,12 @@ fn should_check_flag_key(key: &str) -> bool {
     looks_like_fflag_key(key) || is_known_suspicious_flag_key(key)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlatJsonStatus {
+    Parsed,
+    Invalid,
+}
+
 /// Scan Roblox ClientAppSettings.json and bootstrapper configs for suspicious FFlags.
 pub async fn scan() -> Vec<ScanFinding> {
     let mut findings = Vec::new();
@@ -49,7 +55,10 @@ pub async fn scan() -> Vec<ScanFinding> {
                 // finding. Only attempt JSON parse when there's real
                 // content to parse.
                 if !content.trim().is_empty() {
-                    check_flat_json_flags(&content, path, &mut findings);
+                    if check_flat_json_flags(&content, path, &mut findings) == FlatJsonStatus::Invalid
+                    {
+                        parse_failed = true;
+                    }
                 }
             }
             Err(e) => {
@@ -146,31 +155,23 @@ pub async fn scan() -> Vec<ScanFinding> {
 }
 
 /// Check a flat JSON key-value map of FFlags (the ClientAppSettings.json format).
-fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanFinding>) {
+fn check_flat_json_flags(
+    content: &str,
+    path: &PathBuf,
+    findings: &mut Vec<ScanFinding>,
+) -> FlatJsonStatus {
     let parsed: serde_json::Value = match serde_json::from_str(content) {
         Ok(v) => v,
-        Err(e) => {
-            // Unparseable JSON is an environmental condition (mid-write race,
-            // BOM, JSONC comments, truncation) not cheat evidence. The
-            // bootstrapper side already treated this as non-cheat; emit the
-            // same verdict here for symmetry.
-            findings.push(ScanFinding::new(
-                "client_settings_scanner",
-                ScanVerdict::Inconclusive,
-                format!("Could not parse JSON: {}", e),
-                Some(format!("Path: {}", path.display())),
-            ));
-            return;
-        }
+        Err(_) => return FlatJsonStatus::Invalid,
     };
 
     let map = match parsed.as_object() {
         Some(m) => m,
-        None => return,
+        None => return FlatJsonStatus::Parsed,
     };
 
     if map.is_empty() {
-        return;
+        return FlatJsonStatus::Parsed;
     }
 
     for (key, value) in map {
@@ -267,6 +268,8 @@ fn check_flat_json_flags(content: &str, path: &PathBuf, findings: &mut Vec<ScanF
             }
         }
     }
+
+    FlatJsonStatus::Parsed
 }
 
 /// Scan bootstrapper configuration files for FFlag settings.
@@ -356,7 +359,7 @@ fn scan_bootstrapper_configs(findings: &mut Vec<ScanFinding>) {
             if let Some(obj) = parsed.as_object() {
                 let has_fflags = obj.keys().any(|k| should_check_flag_key(k));
                 if has_fflags {
-                    check_flat_json_flags(&content, &path, findings);
+                    let _ = check_flat_json_flags(&content, &path, findings);
                 }
             }
 
@@ -636,7 +639,7 @@ fn scan_tool_configs(findings: &mut Vec<ScanFinding>) {
                         if let Some(obj) = parsed.as_object() {
                             let has_fflags = obj.keys().any(|k| should_check_flag_key(k));
                             if has_fflags {
-                                check_flat_json_flags(&content, &path, findings);
+                                let _ = check_flat_json_flags(&content, &path, findings);
                             }
                         }
                     }

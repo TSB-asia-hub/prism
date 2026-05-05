@@ -550,6 +550,7 @@ button {
   cursor: pointer;
   align-items: center;
   transition: background 0.1s var(--ease);
+  min-width: 0;
 }
 
 .row:hover { background: var(--surface); }
@@ -630,6 +631,7 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .row__desc {
@@ -640,6 +642,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .row--open .row__desc { white-space: normal; }
@@ -650,6 +653,7 @@ button {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faint);
+  min-width: 0;
 }
 
 .row--clean .row__verdict { color: var(--clean); }
@@ -662,6 +666,7 @@ button {
   font-size: 11px;
   color: var(--text-faint);
   white-space: nowrap;
+  min-width: 0;
 }
 
 .row__caret {
@@ -679,10 +684,11 @@ button {
 }
 
 .row__details {
-  grid-column: 2 / 6;
+  grid-column: 2 / -1;
   max-height: 0;
   overflow: hidden;
   transition: max-height 0.3s var(--ease), padding 0.3s;
+  min-width: 0;
 }
 
 .row--open .row__details {
@@ -700,13 +706,17 @@ button {
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--text-dim);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .row__details-grid {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 4px 14px;
   margin: 0;
+  min-width: 0;
 }
 
 .row__details-row {
@@ -723,7 +733,9 @@ button {
 .row__details-value {
   margin: 0;
   color: var(--text);
-  word-break: break-all;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
   white-space: pre-wrap;
 }
 
@@ -731,7 +743,8 @@ button {
   margin: 8px 0 0;
   color: var(--text-dim);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .row__details-empty {
