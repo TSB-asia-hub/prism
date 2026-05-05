@@ -1,4 +1,4 @@
-# TSBCC FFlag Scanner
+# TSB Competitive FFlag Scanner
 
 A cross-platform desktop tool for detecting FFlag abuse in competitive Roblox tournaments. Built with Rust + Tauri and React + TypeScript.
 
