@@ -570,6 +570,36 @@ fn json_has_clean_flag_file_shape(value: &serde_json::Value) -> bool {
     }
 }
 
+fn json_is_prism_report_artifact(value: &serde_json::Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+
+    let has_report_identity = obj.contains_key("scan_id")
+        && obj.contains_key("timestamp")
+        && obj.contains_key("machine_id")
+        && obj.contains_key("findings");
+    let has_signature = obj.contains_key("hmac_signature") || obj.contains_key("signature");
+    if has_report_identity && has_signature {
+        return true;
+    }
+
+    obj.get("findings")
+        .and_then(|findings| findings.as_array())
+        .map(|findings| {
+            findings.iter().any(|finding| {
+                let Some(finding) = finding.as_object() else {
+                    return false;
+                };
+                finding.contains_key("module")
+                    && finding.contains_key("verdict")
+                    && finding.contains_key("description")
+                    && finding.contains_key("details")
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn verdict_rank(verdict: &ScanVerdict) -> u8 {
     match verdict {
         ScanVerdict::Clean => 0,
@@ -756,6 +786,9 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
     let mut matches: Vec<JsonFlagMatch> = Vec::new();
     let mut source_kind = "Text";
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+        if json_is_prism_report_artifact(&parsed) {
+            return None;
+        }
         if !json_has_clean_flag_file_shape(&parsed) {
             return None;
         }
@@ -1766,6 +1799,51 @@ mod tests {
         assert!(flag_file_finding(&path).is_none());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_prism_report_with_stale_backup_path() {
+        let root =
+            std::env::temp_dir().join(format!("prism_report_stale_test_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Prism_Report_stale.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "scan_id": "abc",
+              "timestamp": "2026-05-05T05:28:32Z",
+              "machine_id": "machine",
+              "os_info": "Windows",
+              "overall_verdict": "Suspicious",
+              "findings": [{
+                "module": "file_scanner",
+                "verdict": "Suspicious",
+                "description": "Suspicious FFlag values found in JSON file: \"ClientAppSettings_backup.json\"",
+                "details": "Path: C:\\Users\\<user>\\AppData\\Local\\Bloxstrap\\Modifications\\ClientSettings\\ClientAppSettings_backup.json | Source: JSON | Flags: DFIntTaskSchedulerTargetFps = \"500\"; FLogNetwork = \"7\"",
+                "timestamp": "2026-05-05T05:28:15Z"
+              }],
+              "hmac_signature": "deadbeef"
+            }"#,
+        )
+        .unwrap();
+
+        assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn report_artifact_detection_handles_unsigned_cache_shape() {
+        let value = serde_json::json!({
+            "findings": [{
+                "module": "file_scanner",
+                "verdict": "Suspicious",
+                "description": "Suspicious FFlag values found in JSON file: \"ClientAppSettings_backup.json\"",
+                "details": "DFIntTaskSchedulerTargetFps = \"500\""
+            }]
+        });
+
+        assert!(json_is_prism_report_artifact(&value));
     }
 
     #[test]
