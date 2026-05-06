@@ -7,6 +7,7 @@ pub mod progress;
 
 use crate::models::ScanFinding;
 use progress::ScanProgress;
+use std::path::{Path, PathBuf};
 
 /// Run all scanners and collect findings, emitting live progress events
 /// to `reporter`. Each scanner is dispatched via `spawn_blocking` so its
@@ -96,7 +97,7 @@ pub async fn run_all_scans_with_progress(reporter: ScanProgress) -> Vec<ScanFind
             }
         }
     }
-    all_findings
+    drop_stale_file_path_findings(all_findings)
 }
 
 /// Convenience wrapper that runs every scanner with progress reporting
@@ -129,5 +130,144 @@ fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {
         }
         // The scanners never yield to the runtime, so a Ready arrives on the
         // first poll. The loop is defensive only.
+    }
+}
+
+fn drop_stale_file_path_findings(findings: Vec<ScanFinding>) -> Vec<ScanFinding> {
+    findings
+        .into_iter()
+        .filter(|finding| file_path_finding_is_current(finding))
+        .collect()
+}
+
+fn file_path_finding_is_current(finding: &ScanFinding) -> bool {
+    if finding.module != "file_scanner" {
+        return true;
+    }
+    let Some(details) = finding.details.as_deref() else {
+        return true;
+    };
+    let Some(path) = details_path_value(details) else {
+        return true;
+    };
+    let Some(resolved) = resolve_redacted_local_path(&path) else {
+        return true;
+    };
+    resolved.exists()
+}
+
+fn details_path_value(details: &str) -> Option<String> {
+    let start = details.find("Path: ")? + "Path: ".len();
+    let rest = &details[start..];
+    let end = rest
+        .find(" | ")
+        .or_else(|| rest.find(", "))
+        .unwrap_or(rest.len());
+    let value = rest[..end].trim().trim_matches('"');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn resolve_redacted_local_path(path: &str) -> Option<PathBuf> {
+    let cleaned = path.trim();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            let profile = PathBuf::from(profile);
+            let redacted = redacted_windows_user_prefix(&profile);
+            if let Some(rest) = cleaned.strip_prefix(&redacted) {
+                return Some(profile.join(rest.trim_start_matches(['\\', '/'])));
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            for prefix in ["/Users/<user>", "/home/<user>"] {
+                if let Some(rest) = cleaned.strip_prefix(prefix) {
+                    return Some(home.join(rest.trim_start_matches('/')));
+                }
+            }
+        }
+    }
+
+    Some(Path::new(cleaned).to_path_buf())
+}
+
+#[cfg(target_os = "windows")]
+fn redacted_windows_user_prefix(profile: &Path) -> String {
+    let profile = profile.to_string_lossy();
+    if let Some((root, _)) = profile.rsplit_once("\\Users\\") {
+        format!("{}\\Users\\<user>", root)
+    } else {
+        "C:\\Users\\<user>".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ScanVerdict;
+
+    #[test]
+    fn details_path_value_parses_pipe_and_comma_formats() {
+        assert_eq!(
+            details_path_value("Path: C:\\tmp\\x.json | Source: JSON").as_deref(),
+            Some("C:\\tmp\\x.json")
+        );
+        assert_eq!(
+            details_path_value("Path: C:\\tmp\\x.json, Last modified: now").as_deref(),
+            Some("C:\\tmp\\x.json")
+        );
+    }
+
+    #[test]
+    fn stale_file_scanner_path_findings_are_dropped() {
+        let missing = std::env::temp_dir().join(format!(
+            "prism-missing-file-finding-{}",
+            std::process::id()
+        ));
+        std::fs::remove_file(&missing).ok();
+        let finding = ScanFinding::new(
+            "file_scanner",
+            ScanVerdict::Suspicious,
+            "Suspicious FFlag values found in JSON file",
+            Some(format!("Path: {} | Source: JSON", missing.display())),
+        );
+
+        assert!(drop_stale_file_path_findings(vec![finding]).is_empty());
+    }
+
+    #[test]
+    fn existing_file_scanner_path_findings_are_kept() {
+        let path = std::env::temp_dir().join(format!(
+            "prism-existing-file-finding-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, "ok").unwrap();
+        let finding = ScanFinding::new(
+            "file_scanner",
+            ScanVerdict::Suspicious,
+            "Suspicious FFlag values found in JSON file",
+            Some(format!("Path: {} | Source: JSON", path.display())),
+        );
+
+        assert_eq!(drop_stale_file_path_findings(vec![finding]).len(), 1);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn non_file_scanner_path_findings_are_kept() {
+        let finding = ScanFinding::new(
+            "prefetch_scanner",
+            ScanVerdict::Suspicious,
+            "Historical execution cache",
+            Some("Path: C:\\definitely\\missing.exe".to_string()),
+        );
+
+        assert_eq!(drop_stale_file_path_findings(vec![finding]).len(), 1);
     }
 }
