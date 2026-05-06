@@ -767,25 +767,9 @@ button {
 }
 
 .row__folder-icon {
-  position: relative;
-  width: 14px;
-  height: 10px;
-  border: 1.5px solid currentColor;
-  border-radius: 2px;
-  transform: translateY(1px);
-}
-
-.row__folder-icon::before {
-  content: "";
-  position: absolute;
-  left: 1px;
-  top: -5px;
-  width: 7px;
-  height: 4px;
-  border: 1.5px solid currentColor;
-  border-bottom: 0;
-  border-radius: 2px 2px 0 0;
-  background: var(--bg);
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .row__caret {

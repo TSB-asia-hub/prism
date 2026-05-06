@@ -778,6 +778,14 @@ fn ext_is_flag_text_candidate(ext: Option<&str>) -> bool {
 /// the scanner fast on large unrelated text files (game logs, chat
 /// transcripts, etc.) that happen to live under a scanned root.
 fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("ClientAppSettings.json"))
+    {
+        return None;
+    }
+
     let content = read_small_text_file(path, JSON_FLAG_SCAN_SIZE_LIMIT_BYTES).ok()?;
     if !content_has_flag_prefix(&content) {
         return None;
@@ -811,6 +819,9 @@ fn flag_file_finding(path: &Path) -> Option<ScanFinding> {
     }
 
     let verdict = strongest_json_verdict(&matches);
+    if matches!(verdict, ScanVerdict::Clean) {
+        return None;
+    }
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1874,6 +1885,55 @@ mod tests {
         std::fs::write(&path, r#"{"FFlagDebugGraphicsPreferD3D11":true}"#).unwrap();
 
         assert!(flag_file_finding(&path).is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_ignores_allowlisted_graphics_client_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "prism_graphics_allowlisted_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ClientAppSettings.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "FFlagHandleAltEnterFullscreenManually": "False",
+              "FIntDebugForceMSAASamples": "1",
+              "DFFlagTextureQualityOverrideEnabled": "True",
+              "DFIntTextureQualityOverride": "0",
+              "FFlagDebugGraphicsPreferOpenGL": true,
+              "FFlagDebugGraphicsPreferVulkan": false,
+              "FFlagDebugGraphicsPreferD3D11": false,
+              "FFlagDebugSkyGray": true
+            }"#,
+        )
+        .unwrap();
+
+        assert!(
+            flag_file_finding(&path).is_none(),
+            "allowlisted graphics-only ClientAppSettings must not produce a file finding"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn flag_file_finding_defers_client_app_settings_to_focused_scanner() {
+        let root = std::env::temp_dir().join(format!(
+            "prism_client_settings_defer_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ClientAppSettings.json");
+        std::fs::write(&path, r#"{"DFIntS2PhysicsSenderRate":1}"#).unwrap();
+
+        assert!(
+            flag_file_finding(&path).is_none(),
+            "broad file scanner must not duplicate ClientAppSettings findings"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -1092,7 +1092,19 @@ const FindingRow = memo(function FindingRow({
             onClick={handleFolderClick}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <span className="row__folder-icon" aria-hidden="true" />
+            <svg
+              className="row__folder-icon"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4.1c.8 0 1.55.38 2.02 1.03L12.7 7.5h5.8A2.5 2.5 0 0 1 21 10v6.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" />
+              <path d="M3 9h18" />
+            </svg>
           </button>
         )}
       </span>
