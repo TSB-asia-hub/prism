@@ -1,4 +1,4 @@
-import { Component, type KeyboardEvent as ReactKeyboardEvent, ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as showOpenDialog, save as showSaveDialog } from "@tauri-apps/plugin-dialog";
@@ -12,6 +12,8 @@ const APP_VERSION =
 
 type Phase = "idle" | "scanning" | "complete";
 type Filter = "all" | "flagged" | "suspicious" | "inconclusive" | "clean";
+type EvidenceFilter = "all" | "runtime" | "files";
+type EvidenceSurface = "runtime" | "files";
 
 // Display metadata for each scanner. The `id` is the stable identifier the
 // backend uses in `scan-progress` events — keep in sync with SCANNER_IDS
@@ -47,6 +49,11 @@ type ScanProgressEvent =
     bytes_scanned: number;
   }
   | { kind: "errored"; scanner: string; message: string };
+
+type FieldAction = {
+  path: string;
+  title: string;
+};
 
 export function emptyProgress(): ProgressMap {
   return Object.fromEntries(
@@ -102,6 +109,7 @@ function AppInner() {
   const [report, setReport] = useState<ScanReport | null>(null);
   const [progress, setProgress] = useState<ProgressMap>(() => emptyProgress());
   const [filter, setFilter] = useState<Filter>("all");
+  const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("all");
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [tauriReady, setTauriReady] = useState<boolean>(() => hasTauriRuntime());
@@ -187,7 +195,7 @@ function AppInner() {
   // never surfaces on a different finding.
   useEffect(() => {
     setOpenKey(null);
-  }, [filter]);
+  }, [filter, evidenceFilter]);
 
   const runScan = useCallback(async () => {
     if (scanInFlight.current) return;
@@ -204,6 +212,7 @@ function AppInner() {
     setImportMeta(null);
     setOpenKey(null);
     setFilter("all");
+    setEvidenceFilter("all");
     setProgress(emptyProgress());
     try {
       const result = await invoke<ScanReport>("run_scan");
@@ -252,6 +261,7 @@ function AppInner() {
       });
       setOpenKey(null);
       setFilter("all");
+      setEvidenceFilter("all");
       setPhase("complete");
       setToast({
         msg: payload.signature_valid
@@ -325,6 +335,17 @@ function AppInner() {
     );
   }, [report]);
 
+  const surfaceCounts = useMemo(() => {
+    if (!report) return { runtime: 0, files: 0 };
+    return report.findings.reduce(
+      (acc, f) => {
+        acc[evidenceSurface(f)]++;
+        return acc;
+      },
+      { runtime: 0, files: 0 },
+    );
+  }, [report]);
+
   const ordered = useMemo(() => {
     if (!report) return [];
     const rank: Record<ScanVerdict, number> = {
@@ -333,12 +354,22 @@ function AppInner() {
       Inconclusive: 2,
       Clean: 3,
     };
+    const surfaceRank: Record<EvidenceSurface, number> = {
+      runtime: 0,
+      files: 1,
+    };
     const sorted = [...report.findings].sort(
-      (a, b) => rank[a.verdict] - rank[b.verdict],
+      (a, b) =>
+        surfaceRank[evidenceSurface(a)] - surfaceRank[evidenceSurface(b)] ||
+        rank[a.verdict] - rank[b.verdict],
     );
-    if (filter === "all") return sorted;
-    return sorted.filter((f) => f.verdict.toLowerCase() === filter);
-  }, [report, filter]);
+    return sorted.filter((f) => {
+      const verdictMatches = filter === "all" || f.verdict.toLowerCase() === filter;
+      const surfaceMatches =
+        evidenceFilter === "all" || evidenceSurface(f) === evidenceFilter;
+      return verdictMatches && surfaceMatches;
+    });
+  }, [report, filter, evidenceFilter]);
 
   return (
     <div className="app">
@@ -369,11 +400,14 @@ function AppInner() {
         phase={phase}
         findings={ordered}
         filter={filter}
+        evidenceFilter={evidenceFilter}
         onFilter={setFilter}
+        onEvidenceFilter={setEvidenceFilter}
         openKey={openKey}
         onToggle={(k) => setOpenKey((prev) => (prev === k ? null : k))}
         onScan={runScan}
         counts={counts}
+        surfaceCounts={surfaceCounts}
       />
       <StatusBar phase={phase} report={report} />
       {toast && <div className={`toast toast--${toast.kind}`}>{toast.msg}</div>}
@@ -701,16 +735,21 @@ function Workarea({
   phase,
   findings,
   filter,
+  evidenceFilter,
   onFilter,
+  onEvidenceFilter,
   openKey,
   onToggle,
   onScan,
   counts,
+  surfaceCounts,
 }: {
   phase: Phase;
   findings: ScanFinding[];
   filter: Filter;
+  evidenceFilter: EvidenceFilter;
   onFilter: (f: Filter) => void;
+  onEvidenceFilter: (f: EvidenceFilter) => void;
   openKey: string | null;
   onToggle: (key: string) => void;
   onScan: () => void;
@@ -720,6 +759,10 @@ function Workarea({
     suspicious: number;
     flagged: number;
     total: number;
+  };
+  surfaceCounts: {
+    runtime: number;
+    files: number;
   };
 }) {
   const chips: { key: Filter; label: string; modifier: string; count: number }[] = [
@@ -734,6 +777,11 @@ function Workarea({
     },
     { key: "clean", label: "Clean", modifier: "filter-chip--clean", count: counts.clean },
   ];
+  const evidenceChips: { key: EvidenceFilter; label: string; count: number }[] = [
+    { key: "all", label: "All evidence", count: counts.total },
+    { key: "runtime", label: "In use", count: surfaceCounts.runtime },
+    { key: "files", label: "Files/history", count: surfaceCounts.files },
+  ];
 
   const showChrome = phase === "complete" && counts.total > 0;
 
@@ -741,31 +789,52 @@ function Workarea({
     <div className="work">
       {showChrome && (
         <div className="filters">
-          <span className="filters__label">Filter</span>
-          {chips.map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              aria-pressed={filter === c.key}
-              className={`filter-chip ${c.modifier} ${filter === c.key ? "filter-chip--active" : ""}`}
-              onClick={() => onFilter(c.key)}
-            >
-              {c.modifier && <span className="filter-chip__dot" />}
-              {c.label}
-              <span style={{ color: "var(--text-muted)", marginLeft: 2 }}>
-                {c.count}
-              </span>
-            </button>
-          ))}
+          <div className="filters__group">
+            <span className="filters__label">Evidence</span>
+            {evidenceChips.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                aria-pressed={evidenceFilter === c.key}
+                className={`filter-chip ${evidenceFilter === c.key ? "filter-chip--active" : ""}`}
+                onClick={() => onEvidenceFilter(c.key)}
+              >
+                {c.label}
+                <span style={{ color: "var(--text-muted)", marginLeft: 2 }}>
+                  {c.count}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="filters__group">
+            <span className="filters__label">Verdict</span>
+            {chips.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                aria-pressed={filter === c.key}
+                className={`filter-chip ${c.modifier} ${filter === c.key ? "filter-chip--active" : ""}`}
+                onClick={() => onFilter(c.key)}
+              >
+                {c.modifier && <span className="filter-chip__dot" />}
+                {c.label}
+                <span style={{ color: "var(--text-muted)", marginLeft: 2 }}>
+                  {c.count}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {showChrome && (
         <div className="table-head">
           <span />
+          <span>Evidence</span>
           <span>Module</span>
           <span>Description</span>
           <span>Verdict</span>
           <span>Time</span>
+          <span />
           <span />
         </div>
       )}
@@ -803,31 +872,56 @@ function Workarea({
       )}
 
       {phase === "complete" &&
-        groupByVerdict(findings).map((group) => (
-          <div className="findings-group" key={group.verdict}>
-            <SectionHeader verdict={group.verdict} count={group.items.length} />
-            {group.items.map((f) => {
-              const key = findingKey(f);
-              return (
-                <FindingRow
-                  key={key}
-                  rowKey={key}
-                  finding={f}
-                  open={openKey === key}
-                  onToggle={onToggle}
-                />
-              );
-            })}
+        groupBySurfaceAndVerdict(findings).map((surfaceGroup) => (
+          <div className="findings-surface" key={surfaceGroup.surface}>
+            <SurfaceHeader
+              surface={surfaceGroup.surface}
+              count={surfaceGroup.items.reduce(
+                (sum, group) => sum + group.items.length,
+                0,
+              )}
+            />
+            {surfaceGroup.items.map((group) => (
+              <div className="findings-group" key={`${surfaceGroup.surface}-${group.verdict}`}>
+                <SectionHeader verdict={group.verdict} count={group.items.length} />
+                {group.items.map((f) => {
+                  const key = findingKey(f);
+                  return (
+                    <FindingRow
+                      key={key}
+                      rowKey={key}
+                      finding={f}
+                      open={openKey === key}
+                      onToggle={onToggle}
+                    />
+                  );
+                })}
+              </div>
+            ))}
           </div>
         ))}
     </div>
   );
 }
 
-// Group already-sorted findings into per-verdict buckets so the UI can
-// render a section header above each cluster (Flagged → Suspicious →
-// Inconclusive → Clean). The input arrives sorted by verdict rank from
-// `ordered`, so this is a single linear pass — no extra sort needed.
+// The input arrives sorted by surface, then verdict, so this is a single
+// linear pass that preserves the runtime-vs-files separation in the UI.
+function evidenceSurface(finding: ScanFinding): EvidenceSurface {
+  return finding.module === "process_scanner" || finding.module === "memory_scanner"
+    ? "runtime"
+    : "files";
+}
+
+function evidenceSurfaceLabel(surface: EvidenceSurface): string {
+  return surface === "runtime" ? "In use now" : "Files and history";
+}
+
+function evidenceSurfaceHelp(surface: EvidenceSurface): string {
+  return surface === "runtime"
+    ? "Running processes and Roblox memory evidence from the current session."
+    : "On-disk files, client settings, and historical execution cache. Review separately from active use.";
+}
+
 export function groupByVerdict(
   findings: ScanFinding[],
 ): { verdict: ScanVerdict; items: ScanFinding[] }[] {
@@ -841,6 +935,43 @@ export function groupByVerdict(
     }
   }
   return groups;
+}
+
+function groupBySurfaceAndVerdict(
+  findings: ScanFinding[],
+): { surface: EvidenceSurface; items: { verdict: ScanVerdict; items: ScanFinding[] }[] }[] {
+  const groups: { surface: EvidenceSurface; items: { verdict: ScanVerdict; items: ScanFinding[] }[] }[] = [];
+  for (const f of findings) {
+    const surface = evidenceSurface(f);
+    let surfaceGroup = groups[groups.length - 1];
+    if (!surfaceGroup || surfaceGroup.surface !== surface) {
+      surfaceGroup = { surface, items: [] };
+      groups.push(surfaceGroup);
+    }
+    const verdictGroup = surfaceGroup.items[surfaceGroup.items.length - 1];
+    if (verdictGroup && verdictGroup.verdict === f.verdict) {
+      verdictGroup.items.push(f);
+    } else {
+      surfaceGroup.items.push({ verdict: f.verdict, items: [f] });
+    }
+  }
+  return groups;
+}
+
+function SurfaceHeader({
+  surface,
+  count,
+}: {
+  surface: EvidenceSurface;
+  count: number;
+}) {
+  return (
+    <div className={`surface-header surface-header--${surface}`}>
+      <span className="surface-header__label">{evidenceSurfaceLabel(surface)}</span>
+      <span className="surface-header__help">{evidenceSurfaceHelp(surface)}</span>
+      <span className="surface-header__count">{count}</span>
+    </div>
+  );
 }
 
 // Section heading for a verdict cluster. Visual cue (color-coded dot)
@@ -905,7 +1036,23 @@ const FindingRow = memo(function FindingRow({
         : f.verdict === "Inconclusive"
           ? "Inconclusive — scanner could not run on this platform or coverage was insufficient."
           : "Clean — no evidence of abuse on this path.";
+  const surface = evidenceSurface(f);
+  const surfaceTitle = evidenceSurfaceHelp(surface);
+  const folderAction = pathFieldAction(f);
   const handleClick = useCallback(() => onToggle(rowKey), [onToggle, rowKey]);
+  const handleFolderClick = useCallback(
+    async (e: ReactMouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      if (!folderAction) return;
+      try {
+        await openFindingFolder(folderAction.path);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("Open folder failed:", err);
+      }
+    },
+    [folderAction],
+  );
   const handleKey = useCallback(
     (e: ReactKeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -926,12 +1073,29 @@ const FindingRow = memo(function FindingRow({
       onKeyDown={handleKey}
     >
       <span className="row__bar" aria-hidden="true" />
+      <span className={`row__surface row__surface--${surface}`} title={surfaceTitle}>
+        {surface === "runtime" ? "in use" : "file"}
+      </span>
       <span className="row__module">{f.module}</span>
       <span className="row__desc">{f.description}</span>
       <span className="row__verdict" title={verdictTitle}>
         <span aria-hidden="true">{glyph}</span> {f.verdict.toLowerCase()}
       </span>
       <span className="row__time">{shortTime(f.timestamp)}</span>
+      <span className="row__actions">
+        {folderAction && (
+          <button
+            type="button"
+            className="row__folder-btn"
+            title={folderAction.title}
+            aria-label="Open containing folder"
+            onClick={handleFolderClick}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <span className="row__folder-icon" aria-hidden="true" />
+          </button>
+        )}
+      </span>
       <span className="row__caret" aria-hidden="true">›</span>
       <div className="row__details">
         <div className="row__details-inner">
@@ -989,6 +1153,25 @@ export function parseFindingDetails(details: string): {
     fields,
     freeform: leftovers.length ? leftovers.join(" · ") : null,
   };
+}
+
+function pathFieldAction(finding: ScanFinding): FieldAction | null {
+  if (evidenceSurface(finding) !== "files" || !finding.details) {
+    return null;
+  }
+  const parsed = parseFindingDetails(finding.details);
+  const field = parsed.fields.find((f) =>
+    ["Path", "Prefetch file"].includes(f.label),
+  );
+  if (!field?.value) return null;
+  return {
+    path: field.value,
+    title: `Open containing folder: ${field.value}`,
+  };
+}
+
+async function openFindingFolder(path: string): Promise<void> {
+  await invoke("open_finding_folder", { path });
 }
 
 function FindingDetails({ details }: { details: string | null }) {

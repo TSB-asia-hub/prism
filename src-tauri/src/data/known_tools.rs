@@ -1,9 +1,13 @@
-/// Known cheat/injection tool process names (lowercase, substring match).
+/// Known cheat/injection tool process names (lowercase, token-boundary match).
 ///
 /// Curation rules:
 /// - Substrings must be specific enough to avoid false positives. `"ida"`
 ///   would match kindle/nvidia/mediaserver and was removed in favor of the
 ///   exact filename match `"ida64.exe"` in KNOWN_TOOL_FILENAMES.
+/// - Do not add bare consumer-app words here. Names like "synapse", "wave",
+///   "bolt", "comet", "electron", "velocity", and "delta" collide with
+///   real hardware/software products and should only be represented by more
+///   specific executable filenames or binary fingerprints.
 /// - Wireshark is widely used by legitimate developers and is intentionally
 ///   excluded.
 /// - Legitimate Roblox launchers are NOT listed here — see
@@ -23,17 +27,10 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
     "odessa",
     "fflag-manager",
     // Roblox executors / DLL frameworks (2026 ecosystem)
-    "synapse",
     "krnl",
     "fluxus",
-    "hydrogen",
-    "wave",
     "solara",
     "krampus",
-    "arceus",
-    "delta",
-    "trigon",
-    "electron",
     "valyse",
     "sirhurt",
     "jjsploit",
@@ -45,15 +42,9 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
     // Swift-branded Roblox tooling should ship with a more specific name
     // under KNOWN_TOOL_FILENAMES instead of a bare three-letter-ish
     // substring.
-    "velocity",
-    "comet",
     "vega-x",
     "vegax",
     "macsploit",
-    "bolt",
-    "cryptic",
-    "volcano",
-    "awp",
     // Generic memory inspection / reverse engineering tools
     "cheatengine",
     "cheat engine",
@@ -84,6 +75,23 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
 /// Known executable filenames for case-insensitive whole-name matching.
 pub static KNOWN_TOOL_FILENAMES: &[&str] = &[
     "Voidstrap.exe",
+    "Synapse X.exe",
+    "Synapse Z.exe",
+    "KRNL.exe",
+    "Fluxus.exe",
+    "Hydrogen.exe",
+    "Solara.exe",
+    "Krampus.exe",
+    "Arceus X.exe",
+    "Delta Executor.exe",
+    "Trigon Evo.exe",
+    "Valyse.exe",
+    "SirHurt.exe",
+    "JJSploit.exe",
+    "Nezur.exe",
+    "VegaX.exe",
+    "Vega-X.exe",
+    "MacSploit.exe",
     "CheatEngine.exe",
     "cheatengine-x86_64.exe",
     "x64dbg.exe",

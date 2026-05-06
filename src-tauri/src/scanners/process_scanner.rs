@@ -196,6 +196,30 @@ mod tests {
     }
 
     #[test]
+    fn consumer_app_names_are_not_known_tool_tokens() {
+        for token in [
+            "synapse", "wave", "bolt", "comet", "electron", "velocity", "delta",
+        ] {
+            assert!(
+                !KNOWN_PROCESS_NAMES.contains(&token),
+                "ambiguous consumer-app token must not flag live processes: {}",
+                token
+            );
+        }
+    }
+
+    #[test]
+    fn razer_synapse_does_not_match_known_process_tokens() {
+        let proc_name = "razer synapse service process.exe";
+        assert!(
+            !KNOWN_PROCESS_NAMES
+                .iter()
+                .any(|known| contains_token(proc_name, known)),
+            "Razer Synapse must not be classified as the Roblox executor"
+        );
+    }
+
+    #[test]
     fn bootstrapper_tokens_are_specific() {
         assert!(contains_token("Froststrap.exe", "froststrap"));
         assert!(contains_token("Homiestrap.exe", "homiestrap"));

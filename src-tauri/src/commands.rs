@@ -1,4 +1,6 @@
 use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::models::ScanReport;
 use crate::reports::report_generator;
@@ -84,4 +86,95 @@ pub async fn import_report(path: String) -> Result<ImportedReport, String> {
         stale,
         source_path: path,
     })
+}
+
+/// Open the folder containing a file finding. Report details redact the
+/// username as `<user>`; for this local-only action we resolve that placeholder
+/// back to the current machine's home/profile path before opening.
+#[tauri::command]
+pub async fn open_finding_folder(path: String) -> Result<(), String> {
+    let resolved = resolve_redacted_user_path(path.trim())?;
+    let target = folder_target(&resolved);
+    if !target.exists() {
+        return Err(format!("Folder does not exist: {}", target.display()));
+    }
+    open_folder(&target)
+}
+
+fn folder_target(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn resolve_redacted_user_path(path: &str) -> Result<PathBuf, String> {
+    let cleaned = path.trim().trim_matches('"');
+    if cleaned.is_empty() {
+        return Err("No path supplied".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            let profile = PathBuf::from(profile);
+            let redacted = redacted_windows_user_prefix(&profile);
+            if let Some(rest) = cleaned.strip_prefix(&redacted) {
+                return Ok(profile.join(rest.trim_start_matches(|c| c == '\\' || c == '/')));
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            for prefix in ["/Users/<user>", "/home/<user>"] {
+                if let Some(rest) = cleaned.strip_prefix(prefix) {
+                    return Ok(home.join(rest.trim_start_matches(|c| c == '/')));
+                }
+            }
+        }
+    }
+
+    Ok(PathBuf::from(cleaned))
+}
+
+#[cfg(target_os = "windows")]
+fn redacted_windows_user_prefix(profile: &Path) -> String {
+    let profile = profile.to_string_lossy();
+    if let Some((root, _)) = profile.rsplit_once("\\Users\\") {
+        format!("{}\\Users\\<user>", root)
+    } else {
+        "C:\\Users\\<user>".to_string()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_folder(path: &Path) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Could not open folder: {}", e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_folder(path: &Path) -> Result<(), String> {
+    Command::new("open")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Could not open folder: {}", e))?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_folder(path: &Path) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map_err(|e| format!("Could not open folder: {}", e))?;
+    Ok(())
 }
