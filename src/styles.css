@@ -592,9 +592,6 @@ button {
   border-bottom: 1px solid var(--line);
   background: var(--bg-sunk);
   font-family: var(--font-mono);
-  position: sticky;
-  top: 82px;
-  z-index: 1;
 }
 
 .surface-header__label {
@@ -631,10 +628,7 @@ button {
   letter-spacing: 0.12em;
   color: var(--text-muted);
   border-top: 1px solid var(--line);
-  position: sticky;
-  top: 130px;
   background: var(--bg);
-  z-index: 1;
 }
 
 .findings-group:first-of-type .section-header {
@@ -997,8 +991,6 @@ button {
   .toolbar__meta { display: none; }
   .surface-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    top: 116px;
   }
   .surface-header__help { grid-column: 1 / -1; white-space: normal; }
-  .section-header { top: 184px; }
 }
