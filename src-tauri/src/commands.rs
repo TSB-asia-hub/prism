@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::models::ScanReport;
 use crate::reports::report_generator;
 use crate::scanners;
-use crate::scanners::progress::ScanProgress;
+use crate::scanners::progress::{CancelToken, ScanProgress};
 
 /// Wire-format payload returned by `import_report`. Carries the parsed
 /// report plus enough provenance metadata for the UI to surface a clear
@@ -32,12 +32,30 @@ pub struct ImportedReport {
 /// backend re-runs scanners rather than trusting the frontend copy (see
 /// `save_report`). Progress events fire on the `scan-progress` topic so the
 /// frontend can show per-scanner state live instead of a fake carousel.
+///
+/// `cancel` is the shared `CancelToken` from Tauri state — we reset it to
+/// false at the start of every run so a previous Stop-button press doesn't
+/// abort the next scan, and the Tauri command `cancel_scan` flips it back
+/// to true to make the running scanners bail.
 #[tauri::command]
-pub async fn run_scan(app: tauri::AppHandle) -> Result<ScanReport, String> {
-    let reporter = ScanProgress::new(app);
+pub async fn run_scan(
+    app: tauri::AppHandle,
+    cancel: tauri::State<'_, CancelToken>,
+) -> Result<ScanReport, String> {
+    cancel.reset();
+    let reporter = ScanProgress::new(app, cancel.inner().clone());
     let findings = scanners::run_all_scans_with_progress(reporter).await;
     let report = report_generator::generate_report(findings);
     Ok(report)
+}
+
+/// Request that the in-flight scan abort. Sets the shared `CancelToken`,
+/// which every scanner's hot loop polls. Returns immediately — the actual
+/// teardown happens inside `run_scan`'s task as scanners observe the flag.
+#[tauri::command]
+pub async fn cancel_scan(cancel: tauri::State<'_, CancelToken>) -> Result<(), String> {
+    cancel.cancel();
+    Ok(())
 }
 
 /// Save a freshly-generated, in-memory-signed report to disk. The frontend

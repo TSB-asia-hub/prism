@@ -17,6 +17,7 @@ use crate::data::known_tools::{
 };
 use crate::data::suspicious_flags::{get_flag_category, get_flag_description, get_flag_severity};
 use crate::models::{ScanFinding, ScanVerdict};
+use crate::scanners::progress::ScanProgress;
 
 /// Upper size bound (bytes) for opportunistic hashing of `.exe` artefacts
 /// found during the walk. The largest known injector in the hash list is
@@ -47,7 +48,12 @@ const BROAD_SCAN_TIME_BUDGET: Duration = Duration::from_secs(45);
 const BROAD_SCAN_BATCH: usize = 256;
 
 /// Scan the filesystem for known tool artifacts.
-pub async fn scan() -> Vec<ScanFinding> {
+///
+/// `reporter` carries the shared cancellation flag — when the user hits the
+/// Stop button on the UI, every long-running loop checks
+/// `reporter.is_cancelled()` and bails out early so the run can collapse to
+/// a partial result within a few hundred milliseconds.
+pub async fn scan(reporter: &ScanProgress) -> Vec<ScanFinding> {
     let mut findings = Vec::new();
     let roots = get_search_roots();
     let current_exe = current_exe_canonical();
@@ -58,6 +64,9 @@ pub async fn scan() -> Vec<ScanFinding> {
     let mut reported_paths: HashSet<PathBuf> = HashSet::new();
 
     for root in &roots {
+        if reporter.is_cancelled() {
+            break;
+        }
         if !root.exists() {
             continue;
         }
@@ -161,8 +170,11 @@ pub async fn scan() -> Vec<ScanFinding> {
     // out by the shared `reported_paths` dedup set, and only adds new
     // findings from places the focused roots couldn't reach (custom
     // folders like D:\flags, OneDrive subtrees outside Documents, etc.).
-    let broad_findings = broad_scan(&mut reported_paths);
-    findings.extend(broad_findings);
+    // Skip entirely if the user already cancelled mid focused-roots pass.
+    if !reporter.is_cancelled() {
+        let broad_findings = broad_scan(&mut reported_paths, reporter);
+        findings.extend(broad_findings);
+    }
 
     if findings.is_empty() {
         let scanned: Vec<String> = roots
@@ -1216,15 +1228,23 @@ fn process_broad_batch(paths: &[PathBuf]) -> Vec<(PathBuf, ScanFinding)> {
 /// stay scoped to the focused roots, where injectors actually install.
 /// Doing them across the whole system would add tens of seconds for no
 /// realistic gain on a flag-detection scan.
-fn broad_scan(reported_paths: &mut HashSet<PathBuf>) -> Vec<ScanFinding> {
+fn broad_scan(
+    reported_paths: &mut HashSet<PathBuf>,
+    reporter: &ScanProgress,
+) -> Vec<ScanFinding> {
     let started = Instant::now();
     let deadline = started + BROAD_SCAN_TIME_BUDGET;
     let roots = broad_scan_roots();
     let mut produced: Vec<ScanFinding> = Vec::new();
     let mut scanned_files: usize = 0;
     let mut timed_out = false;
+    let mut cancelled = false;
 
     'outer: for root in &roots {
+        if reporter.is_cancelled() {
+            cancelled = true;
+            break;
+        }
         if !root.exists() {
             continue;
         }
@@ -1251,6 +1271,10 @@ fn broad_scan(reported_paths: &mut HashSet<PathBuf>) -> Vec<ScanFinding> {
 
         let mut batch: Vec<PathBuf> = Vec::with_capacity(BROAD_SCAN_BATCH);
         for entry in walker.filter_map(|e| e.ok()) {
+            if reporter.is_cancelled() {
+                cancelled = true;
+                break 'outer;
+            }
             if Instant::now() >= deadline {
                 timed_out = true;
                 break 'outer;
@@ -1297,12 +1321,17 @@ fn broad_scan(reported_paths: &mut HashSet<PathBuf>) -> Vec<ScanFinding> {
         .map(|r| r.display().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let verdict = if timed_out {
+    let verdict = if cancelled || timed_out {
         ScanVerdict::Inconclusive
     } else {
         ScanVerdict::Clean
     };
-    let description = if timed_out {
+    let description = if cancelled {
+        format!(
+            "Whole-system flag content scan cancelled by operator after {} files inspected — coverage incomplete",
+            scanned_files
+        )
+    } else if timed_out {
         format!(
             "Whole-system flag content scan stopped at time budget ({} s) — partial coverage",
             BROAD_SCAN_TIME_BUDGET.as_secs()
