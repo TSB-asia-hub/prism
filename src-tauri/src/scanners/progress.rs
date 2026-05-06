@@ -13,6 +13,8 @@
 //! tagged enum so the frontend can discriminate without a second topic.
 
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 /// Event payload shape. `kind` is used as the discriminator on the frontend.
@@ -37,20 +39,59 @@ pub enum ScanProgressEvent {
     },
 }
 
+/// Shared cancellation flag. Cloning the handle is cheap (Arc-backed) — every
+/// `ScanProgress` instance and the `cancel_scan` Tauri command point at the
+/// same underlying `AtomicBool`, so flipping it in the command immediately
+/// makes every running scanner see `is_cancelled() == true` on its next
+/// poll point. Stored in Tauri state via `CancelState` (see lib.rs).
+#[derive(Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// Handle that scanners use to emit progress. Clone is cheap (underlying
 /// `AppHandle` is Arc-backed).
 #[derive(Clone)]
 pub struct ScanProgress {
     app: Option<AppHandle>,
+    cancel: CancelToken,
 }
 
 impl ScanProgress {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app: Some(app) }
+    pub fn new(app: AppHandle, cancel: CancelToken) -> Self {
+        Self {
+            app: Some(app),
+            cancel,
+        }
     }
 
     pub fn noop() -> Self {
-        Self { app: None }
+        Self {
+            app: None,
+            cancel: CancelToken::new(),
+        }
+    }
+
+    /// Quick poll for whether the user has hit the Stop button. Scanners call
+    /// this from their hot loops and bail out early when it returns true.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 
     pub fn started(&self, scanner: &'static str) {

@@ -36,8 +36,7 @@ pub async fn run_all_scans_with_progress(reporter: ScanProgress) -> Vec<ScanFind
     let file_handle = {
         reporter.started("file_scanner");
         tokio::task::spawn_blocking(move || {
-            let _ = file_reporter;
-            futures_block_on(file_scanner::scan())
+            futures_block_on(file_scanner::scan(&file_reporter))
         })
     };
 

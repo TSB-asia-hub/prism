@@ -238,6 +238,31 @@ button {
   padding: 0;
 }
 
+/* Red Stop button shown while a scan is running. The square icon
+   reinforces "stop" semantically (matches the universal media-stop
+   glyph) and makes the action recognizable without reading the label. */
+.btn--danger {
+  background: var(--danger);
+  color: #ffffff;
+  border: 1px solid var(--danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn--danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn__stop-icon {
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
 .btn__spinner {
   width: 11px;
   height: 11px;
@@ -910,6 +935,11 @@ button {
 
 .statusbar__sep {
   color: var(--text-muted);
+}
+
+.statusbar__credit {
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
 }
 
 .statusbar__dot {

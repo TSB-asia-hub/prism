@@ -3443,6 +3443,14 @@ mod windows_impl {
             let mem_info_size = mem::size_of::<MEMORY_BASIC_INFORMATION>();
 
             loop {
+                if reporter.is_cancelled() {
+                    // User clicked Stop. Treat the same as a hard time-out
+                    // (Inconclusive verdict downstream); we don't tear the
+                    // worker pool down mid-region because each in-flight
+                    // ReadProcessMemory must complete cleanly.
+                    timed_out.store(true, Ordering::Relaxed);
+                    break;
+                }
                 if scan_started.elapsed() >= MAX_SCAN_DURATION {
                     timed_out.store(true, Ordering::Relaxed);
                     break;

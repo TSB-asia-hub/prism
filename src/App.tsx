@@ -115,6 +115,7 @@ function AppInner() {
   const [tauriReady, setTauriReady] = useState<boolean>(() => hasTauriRuntime());
   const [exportInFlight, setExportInFlight] = useState(false);
   const [importInFlight, setImportInFlight] = useState(false);
+  const [stopInFlight, setStopInFlight] = useState(false);
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const scanInFlight = useRef(false);
 
@@ -207,6 +208,7 @@ function AppInner() {
       return;
     }
     scanInFlight.current = true;
+    setStopInFlight(false);
     setPhase("scanning");
     setReport(null);
     setImportMeta(null);
@@ -223,8 +225,26 @@ function AppInner() {
       setPhase("idle");
     } finally {
       scanInFlight.current = false;
+      setStopInFlight(false);
     }
   }, []);
+
+  const stopScan = useCallback(async () => {
+    if (!scanInFlight.current || stopInFlight) return;
+    if (!hasTauriRuntime()) return;
+    setStopInFlight(true);
+    try {
+      // The backend's `cancel_scan` flips a shared atomic flag; every
+      // scanner's hot loop polls it and bails. The in-flight `run_scan`
+      // promise will then resolve with whatever findings landed before
+      // the flag was observed (typically within a few hundred ms).
+      await invoke("cancel_scan");
+      setToast({ msg: "Stopping scan…", kind: "info" });
+    } catch (err) {
+      setToast({ msg: `Stop failed: ${String(err)}`, kind: "error" });
+      setStopInFlight(false);
+    }
+  }, [stopInFlight]);
 
   const importReport = useCallback(async () => {
     if (importInFlight) return;
@@ -383,11 +403,13 @@ function AppInner() {
         phase={phase}
         report={report}
         onScan={runScan}
+        onStop={stopScan}
         onExport={exportReport}
         onImport={importReport}
         disabled={!tauriReady}
         exportInFlight={exportInFlight}
         importInFlight={importInFlight}
+        stopInFlight={stopInFlight}
         importMeta={importMeta}
       />
       <Summary
@@ -421,21 +443,25 @@ function Toolbar({
   phase,
   report,
   onScan,
+  onStop,
   onExport,
   onImport,
   disabled = false,
   exportInFlight = false,
   importInFlight = false,
+  stopInFlight = false,
   importMeta = null,
 }: {
   phase: Phase;
   report: ScanReport | null;
   onScan: () => void;
+  onStop: () => void;
   onExport: () => void;
   onImport: () => void;
   disabled?: boolean;
   exportInFlight?: boolean;
   importInFlight?: boolean;
+  stopInFlight?: boolean;
   importMeta?: ImportMeta | null;
 }) {
   const lastScan =
@@ -506,22 +532,25 @@ function Toolbar({
             {exportInFlight ? "Saving…" : "Export"}
           </button>
         )}
-        <button
-          className="btn btn--primary"
-          onClick={onScan}
-          disabled={phase === "scanning" || disabled}
-        >
-          {phase === "scanning" ? (
-            <>
-              <span className="btn__spinner" />
-              Scanning
-            </>
-          ) : phase === "complete" ? (
-            "Rescan"
-          ) : (
-            "Run scan"
-          )}
-        </button>
+        {phase === "scanning" ? (
+          <button
+            className="btn btn--danger"
+            onClick={onStop}
+            disabled={disabled || stopInFlight}
+            title="Cancel the running scan"
+          >
+            <span className="btn__stop-icon" aria-hidden="true" />
+            {stopInFlight ? "Stopping…" : "Stop"}
+          </button>
+        ) : (
+          <button
+            className="btn btn--primary"
+            onClick={onScan}
+            disabled={disabled}
+          >
+            {phase === "complete" ? "Rescan" : "Run scan"}
+          </button>
+        )}
       </div>
     </header>
   );
@@ -1252,6 +1281,8 @@ function StatusBar({
         </span>
         <span className="statusbar__sep">·</span>
         <span>Prism v{APP_VERSION}</span>
+        <span className="statusbar__sep">·</span>
+        <span className="statusbar__credit">Developed by Shurainu and Evelyn</span>
       </div>
       <div className="statusbar__group">
         <span>Local only</span>
