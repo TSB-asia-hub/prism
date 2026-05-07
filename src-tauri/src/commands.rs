@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::Emitter;
 
 use crate::models::ScanReport;
 use crate::reports::report_generator;
@@ -43,8 +44,12 @@ pub async fn run_scan(
     cancel: tauri::State<'_, CancelToken>,
 ) -> Result<ScanReport, String> {
     cancel.reset();
-    let reporter = ScanProgress::new(app, cancel.inner().clone());
-    let findings = scanners::run_all_scans_with_progress(reporter).await;
+    let reporter = ScanProgress::new(app.clone(), cancel.inner().clone());
+    let findings = scanners::run_all_scans_with_partial_progress(reporter, move |findings| {
+        let partial_report = report_generator::generate_report(findings);
+        let _ = app.emit("scan-report-partial", partial_report);
+    })
+    .await;
     let report = report_generator::generate_report(findings);
     Ok(report)
 }

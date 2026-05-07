@@ -8,6 +8,7 @@ pub mod progress;
 use crate::models::ScanFinding;
 use progress::ScanProgress;
 use std::path::{Path, PathBuf};
+use tokio::task::JoinHandle;
 
 /// Run all scanners and collect findings, emitting live progress events
 /// to `reporter`. Each scanner is dispatched via `spawn_blocking` so its
@@ -22,6 +23,20 @@ use std::path::{Path, PathBuf};
 /// - `Done { scanner, findings }` when the task completes cleanly.
 /// - `Errored { scanner, message }` when the task panics.
 pub async fn run_all_scans_with_progress(reporter: ScanProgress) -> Vec<ScanFinding> {
+    run_all_scans_with_partial_progress(reporter, |_| {}).await
+}
+
+/// Run every scanner, calling `on_non_memory_done` as soon as the faster
+/// non-memory scanners have completed. The memory scanner is still running in
+/// parallel while the callback fires, allowing UI callers to publish early
+/// findings without waiting for the memory walk.
+pub async fn run_all_scans_with_partial_progress<F>(
+    reporter: ScanProgress,
+    on_non_memory_done: F,
+) -> Vec<ScanFinding>
+where
+    F: FnOnce(Vec<ScanFinding>),
+{
     // Kick off all scanners in parallel, emitting Started as each is dispatched.
     let process_reporter = reporter.clone();
     let process_handle = {
@@ -67,35 +82,23 @@ pub async fn run_all_scans_with_progress(reporter: ScanProgress) -> Vec<ScanFind
         })
     };
 
-    let mut all_findings = Vec::new();
+    let mut non_memory_findings = Vec::new();
     for (scanner_id, handle) in [
         ("process_scanner", process_handle),
         ("file_scanner", file_handle),
         ("client_settings_scanner", client_handle),
         ("prefetch_scanner", prefetch_handle),
-        ("memory_scanner", memory_handle),
     ] {
-        match handle.await {
-            Ok(mut findings) => {
-                reporter.done(scanner_id, findings.len());
-                all_findings.append(&mut findings);
-            }
-            Err(e) => {
-                // A scanner task panic is a tooling bug, not a cheat signal.
-                // Surface it as Inconclusive so the operator knows coverage
-                // was incomplete, but never let a transient JoinError flip
-                // the overall verdict to Suspicious.
-                let msg = format!("Scanner task panicked: {}", e);
-                reporter.errored(scanner_id, msg.clone());
-                all_findings.push(ScanFinding::new(
-                    "scanner_runtime",
-                    crate::models::ScanVerdict::Inconclusive,
-                    msg,
-                    None,
-                ));
-            }
-        }
+        let mut findings = await_scanner(scanner_id, handle, &reporter).await;
+        non_memory_findings.append(&mut findings);
     }
+
+    let non_memory_findings = drop_stale_file_path_findings(non_memory_findings);
+    on_non_memory_done(non_memory_findings.clone());
+
+    let mut all_findings = non_memory_findings;
+    let mut memory_findings = await_scanner("memory_scanner", memory_handle, &reporter).await;
+    all_findings.append(&mut memory_findings);
     drop_stale_file_path_findings(all_findings)
 }
 
@@ -129,6 +132,33 @@ fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {
         }
         // The scanners never yield to the runtime, so a Ready arrives on the
         // first poll. The loop is defensive only.
+    }
+}
+
+async fn await_scanner(
+    scanner_id: &'static str,
+    handle: JoinHandle<Vec<ScanFinding>>,
+    reporter: &ScanProgress,
+) -> Vec<ScanFinding> {
+    match handle.await {
+        Ok(findings) => {
+            reporter.done(scanner_id, findings.len());
+            findings
+        }
+        Err(e) => {
+            // A scanner task panic is a tooling bug, not a cheat signal.
+            // Surface it as Inconclusive so the operator knows coverage
+            // was incomplete, but never let a transient JoinError flip
+            // the overall verdict to Suspicious.
+            let msg = format!("Scanner task panicked: {}", e);
+            reporter.errored(scanner_id, msg.clone());
+            vec![ScanFinding::new(
+                "scanner_runtime",
+                crate::models::ScanVerdict::Inconclusive,
+                msg,
+                None,
+            )]
+        }
     }
 }
 

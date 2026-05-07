@@ -134,7 +134,8 @@ function AppInner() {
   useEffect(() => {
     if (phase !== "scanning") return;
     if (!hasTauriRuntime()) return;
-    let unlisten: UnlistenFn | null = null;
+    let unlistenProgress: UnlistenFn | null = null;
+    let unlistenPartial: UnlistenFn | null = null;
     let cancelled = false;
     listen<ScanProgressEvent>("scan-progress", (event) => {
       const payload = event.payload;
@@ -177,12 +178,22 @@ function AppInner() {
       if (cancelled) {
         fn();
       } else {
-        unlisten = fn;
+        unlistenProgress = fn;
+      }
+    });
+    listen<ScanReport>("scan-report-partial", (event) => {
+      setReport(event.payload);
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenPartial = fn;
       }
     });
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenPartial) unlistenPartial();
     };
   }, [phase]);
 
@@ -812,7 +823,8 @@ function Workarea({
     { key: "files", label: "Files/history", count: surfaceCounts.files },
   ];
 
-  const showChrome = phase === "complete" && counts.total > 0;
+  const hasFindings = counts.total > 0;
+  const showChrome = (phase === "complete" || phase === "scanning") && hasFindings;
 
   return (
     <div className="work">
@@ -880,7 +892,7 @@ function Workarea({
         </div>
       )}
 
-      {phase === "scanning" && (
+      {phase === "scanning" && !hasFindings && (
         <div className="empty">
           <span className="empty__title">Inspecting surfaces…</span>
           <span className="empty__hint">Results will populate shortly</span>
@@ -900,7 +912,7 @@ function Workarea({
         </div>
       )}
 
-      {phase === "complete" &&
+      {(phase === "complete" || phase === "scanning") &&
         groupBySurfaceAndVerdict(findings).map((surfaceGroup) => (
           <div className="findings-surface" key={surfaceGroup.surface}>
             <SurfaceHeader
