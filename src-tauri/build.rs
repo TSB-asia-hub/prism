@@ -53,15 +53,18 @@ fn main() {
     // and Windows refuses to silently elevate, returning ERROR_ELEVATION
     // _REQUIRED (740) and breaking hot-reload. The dev variant still pulls
     // in Common Controls 6.0 so WebView2 can resolve TaskDialogIndirect.
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let manifest = if profile == "release" {
-        include_str!("app.manifest")
-    } else {
-        include_str!("app.dev.manifest")
-    };
-    let win_attrs = tauri_build::WindowsAttributes::new().app_manifest(manifest);
-    let attrs = tauri_build::Attributes::new().windows_attributes(win_attrs);
-    if let Err(e) = tauri_build::try_build(attrs) {
-        panic!("tauri_build::try_build failed: {}", e);
+    #[cfg(feature = "ui")]
+    {
+        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        let manifest = if profile == "release" {
+            include_str!("app.manifest")
+        } else {
+            include_str!("app.dev.manifest")
+        };
+        let win_attrs = tauri_build::WindowsAttributes::new().app_manifest(manifest);
+        let attrs = tauri_build::Attributes::new().windows_attributes(win_attrs);
+        if let Err(e) = tauri_build::try_build(attrs) {
+            panic!("tauri_build::try_build failed: {}", e);
+        }
     }
 }

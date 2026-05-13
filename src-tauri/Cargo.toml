@@ -1,6 +1,6 @@
 [package]
 name = "prism"
-version = "0.7.9"
+version = "0.7.10"
 description = "Prism — tournament integrity tool for Roblox FFlag detection"
 authors = ["TSBCC"]
 edition = "2021"
@@ -8,7 +8,7 @@ default-run = "prism"
 autobins = false
 
 [workspace]
-members = [".", "tools/memory_evidence_exporter"]
+members = [".", "tools/memory_evidence_exporter", "tools/memory_scan_harness"]
 default-members = ["."]
 resolver = "2"
 
@@ -21,12 +21,23 @@ name = "prism_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
+
+[features]
+default = ["ui"]
+# Pulls in the Tauri runtime + plugins. Disable in dev tools that only
+# want to call into the scanner library (e.g. tools/memory_scan_harness).
+ui = [
+    "dep:tauri",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-build",
+]
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.38"

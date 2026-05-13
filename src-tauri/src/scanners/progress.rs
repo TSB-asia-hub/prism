@@ -15,6 +15,7 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "ui")]
 use tauri::{AppHandle, Emitter};
 
 /// Event payload shape. `kind` is used as the discriminator on the frontend.
@@ -69,11 +70,13 @@ impl CancelToken {
 /// `AppHandle` is Arc-backed).
 #[derive(Clone)]
 pub struct ScanProgress {
+    #[cfg(feature = "ui")]
     app: Option<AppHandle>,
     cancel: CancelToken,
 }
 
 impl ScanProgress {
+    #[cfg(feature = "ui")]
     pub fn new(app: AppHandle, cancel: CancelToken) -> Self {
         Self {
             app: Some(app),
@@ -83,6 +86,7 @@ impl ScanProgress {
 
     pub fn noop() -> Self {
         Self {
+            #[cfg(feature = "ui")]
             app: None,
             cancel: CancelToken::new(),
         }
@@ -114,6 +118,7 @@ impl ScanProgress {
         self.emit(ScanProgressEvent::Errored { scanner, message });
     }
 
+    #[cfg(feature = "ui")]
     fn emit(&self, event: ScanProgressEvent) {
         if let Some(app) = &self.app {
             // Emit failures are ignored — progress is best-effort and must
@@ -121,4 +126,7 @@ impl ScanProgress {
             let _ = app.emit("scan-progress", event);
         }
     }
+
+    #[cfg(not(feature = "ui"))]
+    fn emit(&self, _event: ScanProgressEvent) {}
 }

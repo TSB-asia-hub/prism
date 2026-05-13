@@ -1,10 +1,13 @@
+#[cfg(feature = "ui")]
 mod commands;
 pub mod data;
 pub mod models;
+#[cfg(feature = "ui")]
 mod reports;
-mod scanners;
+pub mod scanners;
 mod util;
 
+#[cfg(feature = "ui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

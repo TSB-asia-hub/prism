@@ -26,6 +26,19 @@ pub static KNOWN_PROCESS_NAMES: &[&str] = &[
     // Internal build-target name of LornoFix (see PDB path in binary)
     "odessa",
     "fflag-manager",
+    // MxStrap — Python+pywebview GUI wrapper around a rebuilt fflag-manager
+    // (odessa) binary. Distributed as Nuitka onefile + Inno Setup installer.
+    // Auto-updates per-Roblox-release, which is why it works where Lorno
+    // (stale offsets) doesn't.
+    "mxstrap",
+    "mx strap",
+    "mxstrap client",
+    // Wen Bootstrapper — Roblox-targeted FFlag cheat bootstrapper reported
+    // in the wider ecosystem. Binary not yet on file for hashing/fingerprint;
+    // name-only detection until samples are recovered.
+    "wenbootstrapper",
+    "wen bootstrapper",
+    "wenstrap",
     // Roblox executors / DLL frameworks (2026 ecosystem)
     "krnl",
     "fluxus",
@@ -114,6 +127,18 @@ pub static KNOWN_TOOL_FILENAMES: &[&str] = &[
     "LornoFix.exe",
     "Lorno Fix.exe",
     "odessa.exe",
+    // MxStrap — Python+pywebview GUI front-end that bundles a rebuilt
+    // fflag-manager (odessa) binary as `session.exe` inside a Nuitka onefile
+    // archive. The wrapper exe varies by version; the version suffix is
+    // matched at the directory level (`MxStrap`) and via SHA-256 entries.
+    "MxStrap.exe",
+    "MxStrap_v1.0.10.exe",
+    "MxStrap_Setup_v1.0.10.exe",
+    "MxStrap_UpdateChecker.exe",
+    // Wen Bootstrapper — Roblox FFlag cheat bootstrapper.
+    "WenBootstrapper.exe",
+    "Wen Bootstrapper.exe",
+    "WenStrap.exe",
 ];
 
 /// Directory names for Roblox-specific FFlag injection / bypass tools. These
@@ -124,6 +149,8 @@ pub static ROBLOX_CHEAT_DIRS: &[&str] = &[
     "FFlagToolkit",
     "LornoBypass",
     "fflag-manager",
+    "MxStrap",
+    "WenBootstrapper",
 ];
 
 /// Directory names for generic reverse-engineering / debugging tools. These
@@ -159,6 +186,30 @@ pub static KNOWN_TOOL_HASHES: &[(&str, &str, &str)] = &[
         "ffaae0bf82a93f662071a76c0165f258db99bae2bfc816e18ebb3e1277a0e3bc",
         "LornoBypass.zip",
         "Distribution archive for the LornoBypass FFlag injector",
+    ),
+    // MxStrap v1.0.10 — Python+pywebview GUI wrapper. Auto-updates frequently,
+    // so this hash will drift; the directory and process-name signals are more
+    // durable. Kept here so the current build is identifiable when seen on
+    // disk independently of the install dir.
+    (
+        "e2cf1c954d8165cf45995a7250f2ee263fa4e471c57af9048b0a02e795dfb7f2",
+        "MxStrap_v1.0.10.exe",
+        "MxStrap FFlag-injector GUI — Nuitka onefile bundle wrapping a rebuilt fflag-manager (odessa) session.exe",
+    ),
+    (
+        "1aca66cbfae55b1d46479794f2a7987d4c8eea66d9ef3390d4ba3847c115ed44",
+        "MxStrap_Setup_v1.0.10.exe",
+        "Inno Setup installer for MxStrap; registers HKLM\\...\\Uninstall\\MxStrap Client_is1",
+    ),
+    (
+        "c239e8deaf6c96c10c666c7cd7bca74c19148affcd6906a20a7936152c64bec5",
+        "MxStrap_UpdateChecker.exe",
+        "MxStrap auto-update component — fetches new offsets per Roblox release, which is why MxStrap works on builds where stale LornoFix fails",
+    ),
+    (
+        "e18e07129ccad150b29a5fb0e03a90a4bbb7333e66111b8bab3c11100b0285b1",
+        "session.exe",
+        "fflag-manager/odessa rebuild bundled inside MxStrap's Nuitka archive (1106 strings identical to LornoFix except PDB path)",
     ),
 ];
 
