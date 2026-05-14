@@ -26,6 +26,31 @@
   color-scheme: dark;
 }
 
+/* Light mode. Drives the entire UI by overriding the surface / text
+   colour tokens — accent colours (--clean, --warn, --danger) stay the
+   same because they're semantic. Tuned so the contrast budget matches
+   dark mode (text-dim/-faint/-muted preserve relative emphasis). */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-sunk: #f4f4f5;
+  --bg-raised: #ffffff;
+  --line: #e5e7eb;
+  --line-strong: #d4d4d8;
+  --surface: #f9fafb;
+  --surface-hover: #f1f2f4;
+
+  --text: #18181b;
+  --text-dim: #52525b;
+  --text-faint: #71717a;
+  --text-muted: #a1a1aa;
+
+  /* Slightly darker green in light mode — lime-500 reads as too pale
+     on white. Other accents (orange / rose) have enough chroma already. */
+  --clean: #65a30d;
+
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -100,11 +125,39 @@ button {
   letter-spacing: -0.015em;
 }
 
-.brand__logo {
-  width: 12px;
-  height: 12px;
-  background: var(--text);
-  border-radius: 2px;
+.brand__theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s,
+    color 0.12s, transform 0.12s var(--ease);
+}
+
+.brand__theme-toggle:hover {
+  background: var(--surface-hover);
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.brand__theme-toggle:active {
+  transform: scale(0.94);
+}
+
+.brand__theme-toggle:focus-visible {
+  outline: 2px solid var(--text-faint);
+  outline-offset: 2px;
+}
+
+.brand__theme-toggle svg {
+  display: block;
 }
 
 .brand__sub {
@@ -219,7 +272,7 @@ button {
   color: var(--bg);
 }
 
-.btn--primary:hover:not(:disabled) { background: #ffffff; }
+.btn--primary:hover:not(:disabled) { filter: brightness(1.1); }
 .btn--primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn--ghost {
@@ -717,8 +770,8 @@ button {
 
 .row__surface--runtime {
   color: var(--text);
-  border-color: rgba(250, 250, 250, 0.25);
-  background: rgba(250, 250, 250, 0.04);
+  border-color: var(--line-strong);
+  background: var(--surface);
 }
 
 .row__surface--files {

@@ -104,6 +104,21 @@ type ImportPayload = {
   source_path: string;
 };
 
+type Theme = "dark" | "light";
+
+// Read the persisted theme from localStorage. Default to dark on first
+// launch (and whenever access is denied — Tauri's webview supports
+// localStorage, but the try/catch keeps this safe under SSR / tests).
+function readInitialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem("prism-theme");
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    /* fall through to default */
+  }
+  return "dark";
+}
+
 function AppInner() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<ScanReport | null>(null);
@@ -117,7 +132,26 @@ function AppInner() {
   const [importInFlight, setImportInFlight] = useState(false);
   const [stopInFlight, setStopInFlight] = useState(false);
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
+  const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
   const scanInFlight = useRef(false);
+
+  // Apply theme to the root element so global CSS variables can switch
+  // via `:root[data-theme="light"]`. Persist to localStorage so the
+  // operator's choice survives app restarts.
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+    try {
+      localStorage.setItem("prism-theme", theme);
+    } catch {
+      /* localStorage might be unavailable; preference just won't persist */
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  }, []);
 
   // The Tauri runtime is injected synchronously in the real webview, but if
   // the first render raced the injection (some loader orderings), re-check
@@ -422,6 +456,8 @@ function AppInner() {
         importInFlight={importInFlight}
         stopInFlight={stopInFlight}
         importMeta={importMeta}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
       <Summary
         phase={phase}
@@ -462,6 +498,8 @@ function Toolbar({
   importInFlight = false,
   stopInFlight = false,
   importMeta = null,
+  theme,
+  onToggleTheme,
 }: {
   phase: Phase;
   report: ScanReport | null;
@@ -474,6 +512,8 @@ function Toolbar({
   importInFlight?: boolean;
   stopInFlight?: boolean;
   importMeta?: ImportMeta | null;
+  theme: Theme;
+  onToggleTheme: () => void;
 }) {
   const lastScan =
     phase === "scanning"
@@ -497,7 +537,23 @@ function Toolbar({
     <header className="toolbar">
       <div className="toolbar__left">
         <div className="brand">
-          <span className="brand__logo" />
+          <button
+            type="button"
+            className="brand__theme-toggle"
+            onClick={onToggleTheme}
+            aria-label={
+              theme === "dark"
+                ? "Switch to light mode"
+                : "Switch to dark mode"
+            }
+            title={
+              theme === "dark"
+                ? "Switch to light mode"
+                : "Switch to dark mode"
+            }
+          >
+            {theme === "dark" ? <MoonIcon /> : <SunIcon />}
+          </button>
           <span>Prism</span>
         </div>
         <div className="toolbar__divider" />
@@ -564,6 +620,44 @@ function Toolbar({
         )}
       </div>
     </header>
+  );
+}
+
+// Theme-toggle icons. Inline SVG keeps colour bound to `currentColor` so
+// the button picks up the active text token in both modes — no asset
+// pipeline, no separate dark/light icon files.
+function MoonIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </svg>
   );
 }
 
