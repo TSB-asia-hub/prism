@@ -32,9 +32,9 @@ const MAX_REGIONS_WALKED: usize = 200_000;
 
 /// Wall-clock safety cap for the entire memory scan. Without this, a stuck
 /// `ReadProcessMemory` on a pathological region (rare, but observed in
-/// field reports) can hang the UI indefinitely with no recovery path. On
-/// expiry the scan returns an Inconclusive "aborted" finding so the user
-/// learns coverage was incomplete rather than seeing an infinite spinner.
+/// field reports) can hang the UI indefinitely with no recovery path. The
+/// cap is treated as a hard coverage failure only when region enumeration
+/// was incomplete or the unread span crosses the material-gap thresholds.
 const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Max per-chunk read (16 MiB). Regions larger than this are chunked with a
@@ -1243,6 +1243,19 @@ impl MemoryCoverage {
             self.read_failed_bytes
         )
     }
+}
+
+fn timeout_allows_clean_summary(scan_completed: bool, coverage: MemoryCoverage) -> bool {
+    let timeout_gap = coverage.gap_bytes().max(
+        coverage
+            .intended_bytes
+            .saturating_sub(coverage.bytes_scanned.min(coverage.intended_bytes)),
+    );
+
+    scan_completed
+        && coverage.regions_scanned > 0
+        && !coverage.no_successful_reads()
+        && !coverage_gap_is_material(timeout_gap, coverage.intended_bytes)
 }
 
 /// Scan Roblox process memory for runtime FFlag injections.
@@ -5225,6 +5238,8 @@ mod windows_impl {
         let coverage_details = coverage.details();
         let no_successful_memory_reads = coverage.no_successful_reads();
         let material_coverage_gap = coverage.material_gap();
+        let timed_out_with_acceptable_coverage =
+            timed_out && timeout_allows_clean_summary(scan_completed, coverage);
 
         // Cross-region correlation for binary-value-anchored matches.
         // Each parallel worker can only see its own region's strings, so
@@ -5419,7 +5434,7 @@ mod windows_impl {
         // Honest summary. Environmental / coverage failures are
         // Inconclusive, not Suspicious — slow disks, large processes, and
         // truncated kernel enums are not evidence of cheating.
-        if timed_out {
+        if timed_out && !timed_out_with_acceptable_coverage {
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Inconclusive,
@@ -5484,20 +5499,36 @@ mod windows_impl {
                 )),
             ));
         } else if table.total_flags() == 0 {
+            let description = if timed_out_with_acceptable_coverage {
+                format!(
+                    "No suspicious FFlags found in Roblox process memory ({}s time budget reached with acceptable coverage)",
+                    MAX_SCAN_DURATION.as_secs()
+                )
+            } else {
+                "No suspicious FFlags found in Roblox process memory".to_string()
+            };
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
-                "No suspicious FFlags found in Roblox process memory",
+                description,
                 Some(format!(
                     "PID: {}, regions_scanned: {}, bytes_scanned: {} | {}",
                     pid, regions_scanned, bytes_scanned, coverage_details
                 )),
             ));
         } else {
+            let description = if timed_out_with_acceptable_coverage {
+                format!(
+                    "Memory scan reached {}s time budget with acceptable coverage",
+                    MAX_SCAN_DURATION.as_secs()
+                )
+            } else {
+                "Memory scan completed with acceptable coverage".to_string()
+            };
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
-                "Memory scan completed with acceptable coverage",
+                description,
                 Some(format!(
                     "PID: {}, regions_scanned: {} | {}",
                     pid, regions_scanned, coverage_details
@@ -5872,6 +5903,53 @@ mod tests {
 
         assert_eq!(coverage.gap_bytes(), 1_153_433_600);
         assert!(coverage.material_gap());
+    }
+
+    #[test]
+    fn timeout_with_completed_enumeration_and_small_gap_can_stay_clean() {
+        let coverage = MemoryCoverage {
+            intended_bytes: 4_063_125_504,
+            bytes_scanned: 3_749_311_507,
+            regions_scanned: 2884,
+            truncated_regions: 0,
+            truncated_bytes: 0,
+            read_failures: 94_617,
+            read_failed_bytes: 289_886_237,
+        };
+
+        assert!(!coverage.material_gap());
+        assert!(timeout_allows_clean_summary(true, coverage));
+    }
+
+    #[test]
+    fn timeout_before_region_enumeration_completes_is_still_inconclusive() {
+        let coverage = MemoryCoverage {
+            intended_bytes: 4 * 1024 * 1024 * 1024u64,
+            bytes_scanned: 3_900_000_000,
+            regions_scanned: 2884,
+            truncated_regions: 0,
+            truncated_bytes: 0,
+            read_failures: 10,
+            read_failed_bytes: 128 * 1024 * 1024u64,
+        };
+
+        assert!(!timeout_allows_clean_summary(false, coverage));
+    }
+
+    #[test]
+    fn timeout_with_completed_enumeration_but_large_unscanned_gap_is_inconclusive() {
+        let coverage = MemoryCoverage {
+            intended_bytes: 4 * 1024 * 1024 * 1024u64,
+            bytes_scanned: 512 * 1024 * 1024u64,
+            regions_scanned: 512,
+            truncated_regions: 0,
+            truncated_bytes: 0,
+            read_failures: 0,
+            read_failed_bytes: 0,
+        };
+
+        assert!(!coverage.material_gap());
+        assert!(!timeout_allows_clean_summary(true, coverage));
     }
 
     /// Regression guard: Bloxstrap / Fishstrap install Roblox under their
