@@ -4178,25 +4178,82 @@ mod windows_impl {
         findings
     }
 
+    #[derive(Clone, Copy)]
+    enum RenderConfigCacheTrust {
+        CurrentPid,
+        StaleValidated,
+    }
+
+    impl RenderConfigCacheTrust {
+        fn label(self) -> &'static str {
+            match self {
+                Self::CurrentPid => "current Roblox PID",
+                Self::StaleValidated => "stale cache validated against current Roblox memory",
+            }
+        }
+
+        fn counts_without_default_diff(self) -> bool {
+            matches!(self, Self::CurrentPid)
+        }
+    }
+
+    fn render_config_dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("APPDATA").map(|appdata| {
+            std::path::PathBuf::from(appdata)
+                .join("Microsoft")
+                .join("RenderConfig")
+        })
+    }
+
     /// The current MxStrap UI writes a per-PID address cache under a disguised
     /// RenderConfig folder. Treat that file only as a map: the finding is
     /// emitted from live Roblox memory reads at the cached addresses.
     fn render_config_cache_path(pid: u32) -> Option<std::path::PathBuf> {
-        std::env::var_os("APPDATA").map(|appdata| {
-            std::path::PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("RenderConfig")
-                .join(format!("flags_{}.json", pid))
-        })
+        Some(render_config_dir()?.join(format!("flags_{}.json", pid)))
+    }
+
+    fn render_config_cache_candidates(
+        pid: u32,
+    ) -> Vec<(std::path::PathBuf, RenderConfigCacheTrust)> {
+        let mut out = Vec::new();
+        let current = render_config_cache_path(pid);
+        if let Some(path) = current.as_ref() {
+            out.push((path.clone(), RenderConfigCacheTrust::CurrentPid));
+        }
+
+        let Some(dir) = render_config_dir() else {
+            return out;
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        let mut stale: Vec<_> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+                if !file_name.starts_with("flags_") || !file_name.ends_with(".json") {
+                    return None;
+                }
+                if current.as_ref().is_some_and(|current| current == &path) {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((path, modified))
+            })
+            .collect();
+        stale.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+        out.extend(
+            stale
+                .into_iter()
+                .take(8)
+                .map(|(path, _)| (path, RenderConfigCacheTrust::StaleValidated)),
+        );
+        out
     }
 
     fn render_config_plain_config_path() -> Option<std::path::PathBuf> {
-        std::env::var_os("APPDATA").map(|appdata| {
-            std::path::PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("RenderConfig")
-                .join("render_cfg.dat")
-        })
+        Some(render_config_dir()?.join("render_cfg.dat"))
     }
 
     fn render_config_cache_key(flag_name: &str) -> &str {
@@ -4341,22 +4398,36 @@ mod windows_impl {
         }
     }
 
-    fn inspect_render_config_runtime_overrides(
+    fn module_file_default_for_addr(
+        addr: usize,
+        main_module: Option<(usize, usize)>,
+        image_defaults: Option<&PeImageDefaults>,
+    ) -> Option<i32> {
+        let (module_base, module_size) = main_module?;
+        let defaults = image_defaults?;
+        let module_end = module_base.checked_add(module_size)?;
+        let value_end = addr.checked_add(4)?;
+        if addr < module_base || value_end > module_end {
+            return None;
+        }
+        defaults.read_i32_at_rva(addr.checked_sub(module_base)?)
+    }
+
+    fn inspect_render_config_cache(
         handle: HANDLE,
         pid: u32,
         exe_path: Option<&str>,
-    ) -> Vec<ScanFinding> {
-        let Some(cache_path) = render_config_cache_path(pid) else {
-            return Vec::new();
-        };
+        cache_path: std::path::PathBuf,
+        trust: RenderConfigCacheTrust,
+    ) -> Option<ScanFinding> {
         let Ok(content) = std::fs::read_to_string(&cache_path) else {
-            return Vec::new();
+            return None;
         };
         let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-            return Vec::new();
+            return None;
         };
         let Some(obj) = parsed.as_object() else {
-            return Vec::new();
+            return None;
         };
 
         let config_only_values = render_config_config_only_values(obj);
@@ -4382,55 +4453,56 @@ mod windows_impl {
                 continue;
             };
             if runtime_rule_matches_observed(rule, raw_value) {
+                let live_value = i32::from_le_bytes(raw_value);
+                let default_value =
+                    module_file_default_for_addr(addr, main_module, image_defaults.as_ref());
+                if default_value.is_some_and(|default| default == live_value)
+                    || (!trust.counts_without_default_diff() && default_value.is_none())
+                {
+                    continue;
+                }
                 exact_cache_keys.insert(cache_key.to_string());
+                let default_note = default_value
+                    .map(|default| format!(" (file default {})", default))
+                    .unwrap_or_default();
                 exact_matches.push(format!(
-                    "{}={} @0x{:X}",
+                    "{}={}{} @0x{:X}",
                     rule.name,
                     runtime_value_label(rule.value),
+                    default_note,
                     addr
                 ));
             }
         }
 
-        if let (Some((module_base, module_size)), Some(defaults)) = (main_module, &image_defaults) {
-            for (cache_key, value) in obj {
-                if exact_cache_keys.contains(cache_key) {
-                    continue;
-                }
-                let Some(addr) = value.as_u64().and_then(|value| usize::try_from(value).ok())
-                else {
-                    continue;
-                };
-                let Some(module_end) = module_base.checked_add(module_size) else {
-                    continue;
-                };
-                let Some(value_end) = addr.checked_add(4) else {
-                    continue;
-                };
-                if addr < module_base || value_end > module_end {
-                    continue;
-                }
-                let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
-                    continue;
-                };
-                let live_value = i32::from_le_bytes(raw_value);
-                let rva = addr - module_base;
-                let Some(default_value) = defaults.read_i32_at_rva(rva) else {
-                    continue;
-                };
-                if live_value == default_value {
-                    continue;
-                }
-                changed_cached_values.push(format!(
-                    "{}={} (file default {}) @0x{:X}",
-                    cache_key, live_value, default_value, addr
-                ));
+        for (cache_key, value) in obj {
+            if exact_cache_keys.contains(cache_key) {
+                continue;
             }
+            let Some(addr) = value.as_u64().and_then(|value| usize::try_from(value).ok()) else {
+                continue;
+            };
+            let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
+                continue;
+            };
+            let live_value = i32::from_le_bytes(raw_value);
+            let Some(default_value) =
+                module_file_default_for_addr(addr, main_module, image_defaults.as_ref())
+            else {
+                continue;
+            };
+            if live_value == default_value {
+                continue;
+            }
+            changed_cached_values.push(format!(
+                "{}={} (file default {}) @0x{:X}",
+                cache_key, live_value, default_value, addr
+            ));
         }
 
         let evidence_count = exact_matches.len() + changed_cached_values.len();
         if evidence_count == 0 {
-            return Vec::new();
+            return None;
         }
 
         let verdict = if evidence_count >= RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES {
@@ -4445,6 +4517,7 @@ mod windows_impl {
         let mut detail_fields = vec![
             format!("PID: {}", pid),
             format!("Address cache: {}", cache_path.display()),
+            format!("Cache trust: {}", trust.label()),
             format!("Address-backed live overrides: {}", evidence_count),
             format!(
                 "Exact curated matches: {}",
@@ -4462,15 +4535,30 @@ mod windows_impl {
             ));
         }
         detail_fields.push(
-            "Detection: read cached live Roblox variable addresses; exact curated values are confirmed directly, and uncurated cached values are reported only when live memory differs from the Roblox executable default".to_string(),
+            "Detection: read cached live Roblox variable addresses; exact curated values are confirmed only when they are not the executable default, and uncurated cached values are reported only when live memory differs from the Roblox executable default".to_string(),
         );
 
-        vec![ScanFinding::new(
+        Some(ScanFinding::new(
             "memory_scanner",
             verdict,
             description,
             Some(detail_fields.join(" | ")),
-        )]
+        ))
+    }
+
+    fn inspect_render_config_runtime_overrides(
+        handle: HANDLE,
+        pid: u32,
+        exe_path: Option<&str>,
+    ) -> Vec<ScanFinding> {
+        for (cache_path, trust) in render_config_cache_candidates(pid) {
+            if let Some(finding) =
+                inspect_render_config_cache(handle, pid, exe_path, cache_path, trust)
+            {
+                return vec![finding];
+            }
+        }
+        Vec::new()
     }
 
     /// Read a 4-byte flag value via the node-pointer-chain:
