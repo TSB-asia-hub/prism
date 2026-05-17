@@ -12,7 +12,7 @@ The important security problem is detecting non-allowlisted Roblox FFlags in thr
 - In known injector/tool artifacts, via process, file, prefetch, hashes, paths, and heap markers.
 - In the live Roblox process, where injectors patch FastFlag runtime values directly in memory.
 
-Current prepared release in this workspace is `v0.8.0` / package version `0.8.0`.
+Current prepared release in this workspace is `v0.8.1` / package version `0.8.1`.
 Prism is distributed as a portable Windows executable, not an installer. Keep
 Tauri bundling disabled for release builds unless the user explicitly changes
 the distribution model.
@@ -239,13 +239,15 @@ The memory scanner now has a RenderConfig fallback path:
 1. Look for `flags_<pid>.json`.
 2. Strip known prefixes from `RUNTIME_OVERRIDE_RULES` names (`DFInt`, `FInt`, `DFFlag`, etc.) to match the cache keys.
 3. Read each cached live address with `ReadProcessMemory`.
-4. Elevate only when the live value matches a curated injected value.
-5. For cache entries that are not curated yet, compare the live value to the same RVA in the Roblox executable on disk. Report the cached value only when live memory differs from the executable default.
-6. Flag when at least three curated/diffed values match; one or two matches are suspicious.
+4. Elevate only when the live value differs from the same RVA in the Roblox executable on disk. Exact curated values are not counted if the value is still the executable default.
+5. If the current-PID cache is missing or yields no live diff, probe the newest stale `flags_*.json` files as a fallback, but only count addresses that validate against the current Roblox module and differ from the executable default.
+6. Flag when at least three live changed values match; one or two matches are suspicious.
 
 This is not the same as solving the hash-table singleton walk. It is a pragmatic current-build/current-injector detection path that confirms the live cheat effect from memory while using the injector's address cache as a map.
 
-Important safety behavior: the scanner uses only `flags_<current Roblox pid>.json`. If the cache PID does not match the running Roblox PID, Prism ignores it rather than reusing stale evidence from a previous process.
+Important safety behavior: the current-PID cache is trusted as context, but stale caches are used only when their addresses still validate in the current Roblox process and the current live value differs from the executable default.
+
+The client-settings scanner also reports `%APPDATA%\Microsoft\RenderConfig\render_cfg.dat` and recent `flags_*.json` files as suspicious tool artifacts. This catches lazy cache deletion / PID-mismatch cases as file evidence, but does not claim live memory proof unless the memory scanner can still validate current Roblox memory.
 
 Current injected repro values confirmed live in Roblox via the RenderConfig cache:
 
@@ -341,10 +343,10 @@ Keep Rust crate version, npm package version, and release tags aligned.
 
 Known release state in this workspace:
 
-- `package.json`: `0.8.0`
-- `src-tauri/Cargo.toml`: `0.8.0`
-- `src-tauri/tauri.conf.json`: `0.8.0`
-- Last completed local build: `v0.8.0`
+- `package.json`: `0.8.1`
+- `src-tauri/Cargo.toml`: `0.8.1`
+- `src-tauri/tauri.conf.json`: `0.8.1`
+- Last completed local build: `v0.8.1`
 
 ## Testing Expectations
 

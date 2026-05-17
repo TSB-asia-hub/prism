@@ -665,6 +665,39 @@ fn get_tool_config_paths() -> Vec<(&'static str, Vec<PathBuf>)> {
             if fftoolkit_config.exists() {
                 configs.push(("FFlagToolkit", vec![fftoolkit_config]));
             }
+
+            let render_config_dir = PathBuf::from(&appdata)
+                .join("Microsoft")
+                .join("RenderConfig");
+            let mut render_config_paths = Vec::new();
+            let render_cfg = render_config_dir.join("render_cfg.dat");
+            if render_cfg.exists() {
+                render_config_paths.push(render_cfg);
+            }
+            if let Ok(entries) = std::fs::read_dir(&render_config_dir) {
+                let mut flag_caches: Vec<_> = entries
+                    .filter_map(|entry| {
+                        let entry = entry.ok()?;
+                        let path = entry.path();
+                        let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+                        if !file_name.starts_with("flags_") || !file_name.ends_with(".json") {
+                            return None;
+                        }
+                        let modified = entry.metadata().ok()?.modified().ok()?;
+                        Some((path, modified))
+                    })
+                    .collect();
+                flag_caches.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+                render_config_paths.extend(
+                    flag_caches
+                        .into_iter()
+                        .take(8)
+                        .map(|(path, _)| path),
+                );
+            }
+            if !render_config_paths.is_empty() {
+                configs.push(("MxStrap RenderConfig", render_config_paths));
+            }
         }
     }
 
