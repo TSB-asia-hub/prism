@@ -1228,18 +1228,52 @@ async function openFindingFolder(path: string): Promise<void> {
 }
 
 function FindingDetails({ details }: { details: string | null }) {
+  const [copied, setCopied] = useState(false);
   const parsed = useMemo(
     () => (details ? parseFindingDetails(details) : null),
+    [details],
+  );
+  const handleCopy = useCallback(
+    async (e: ReactMouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      if (!details) return;
+      try {
+        await navigator.clipboard.writeText(details);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1600);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("Copy evidence failed:", err);
+      }
+    },
     [details],
   );
   if (!details || !parsed) {
     return <span className="row__details-empty">No additional details.</span>;
   }
+  const copyButton = (
+    <div className="row__details-toolbar">
+      <button
+        type="button"
+        className="row__copy-btn"
+        onClick={handleCopy}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        {copied ? "Copied" : "Copy evidence"}
+      </button>
+    </div>
+  );
   if (parsed.fields.length === 0) {
-    return <span className="row__details-freeform">{details}</span>;
+    return (
+      <>
+        {copyButton}
+        <span className="row__details-freeform">{details}</span>
+      </>
+    );
   }
   return (
     <>
+      {copyButton}
       <dl className="row__details-grid">
         {parsed.fields.map((f, i) => (
           <div className="row__details-row" key={`${f.label}-${i}`}>

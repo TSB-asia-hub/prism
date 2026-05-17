@@ -638,6 +638,116 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Int(1),
         string_scan_promote: true,
     },
+    RuntimeOverrideRule {
+        name: "DFIntActionStationDebounceTime",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntOnDemandAdsProviderHttpDebounceTimeMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSimTimestepMultiplierDebounceCount",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntSimTouchDebounceEntryLimit",
+        value: RuntimeFlagValue::Int(32),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntAICOInputCommentDebounceTimeMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntAICOInputDebounceTimeMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntAICOInputPreLspDebounceTimeMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntLuaAppSearchAutocompleteDebounceMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntActivatedCountTimerMSMouse",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntActivatedCountTimerMSKeyboard",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntCLI20390_2",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntClientPacketMaxDelayMs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntRenderingThrottleDelayInMS",
+        value: RuntimeFlagValue::Int(1),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxProcessPacketsStepsAccumulated",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxDataPacketPerSend",
+        value: RuntimeFlagValue::Int(100_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntLargePacketQueueSizeCutoffMB",
+        value: RuntimeFlagValue::Int(1_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCodecMaxOutgoingFrames",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCodecMaxIncomingPackets",
+        value: RuntimeFlagValue::Int(100),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FLogNetwork",
+        value: RuntimeFlagValue::Int(7),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxProcessPacketsStepsPerCyclic",
+        value: RuntimeFlagValue::Int(5_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxProcessPacketsJobScaling",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
 ];
 
 /// Aggregated state for high-risk strings that offset-based FFlag injectors
@@ -2502,12 +2612,7 @@ fn scan_buffer(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
         table,
     );
     for &layout in ALTERNATIVE_NODE_LAYOUTS {
-        scan_runtime_long_string_node_candidates_with_layout(
-            buffer,
-            base_address,
-            layout,
-            table,
-        );
+        scan_runtime_long_string_node_candidates_with_layout(buffer, base_address, layout, table);
     }
 
     let markers = scan_tool_markers(buffer, base_address, table);
@@ -2522,13 +2627,7 @@ fn scan_buffer(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
         table,
     );
     for &layout in ALTERNATIVE_NODE_LAYOUTS {
-        scan_runtime_node_entries_with_layout(
-            buffer,
-            base_address,
-            &runtime_hits,
-            layout,
-            table,
-        );
+        scan_runtime_node_entries_with_layout(buffer, base_address, &runtime_hits, layout, table);
     }
 
     // ASCII generic prefix scan — captures known AND unknown flags.
@@ -2572,17 +2671,16 @@ fn scan_buffer(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
 /// value, validate by name proximity. Records hits via `record_with_value`
 /// so the existing findings pipeline (`findings_from_table`) elevates the
 /// verdict via the context path.
-fn scan_binary_cheat_values(
-    buffer: &[u8],
-    base_address: usize,
-    table: &mut FlagHitTable,
-) {
+fn scan_binary_cheat_values(buffer: &[u8], base_address: usize, table: &mut FlagHitTable) {
     if buffer.len() < 4 {
         return;
     }
     const PROXIMITY_BYTES: usize = 256;
 
-    for &rule in RUNTIME_OVERRIDE_RULES.iter().filter(|r| r.string_scan_promote) {
+    for &rule in RUNTIME_OVERRIDE_RULES
+        .iter()
+        .filter(|r| r.string_scan_promote)
+    {
         let value = match rule.value {
             RuntimeFlagValue::Int(v) => v,
             // Bool rules excluded — only two possible values means ~50%
@@ -2635,10 +2733,7 @@ fn scan_binary_cheat_values(
                     // raw hits (e.g. -30 appears thousands of times in any
                     // process's heap) does not blow up memory or runtime.
                     const MAX_VALUE_LOCS_PER_RULE: usize = 4096;
-                    let locs = table
-                        .binary_value_locations
-                        .entry(rule.name)
-                        .or_default();
+                    let locs = table.binary_value_locations.entry(rule.name).or_default();
                     if locs.len() < MAX_VALUE_LOCS_PER_RULE {
                         locs.push(value_address);
                     }
@@ -3125,6 +3220,11 @@ mod windows_impl {
 
     const RUNTIME_VALUE_PTR_OFFSET: usize = 0xC0;
     const RUNTIME_MAX_CHAIN_STEPS: usize = 128;
+    const RUNTIME_ENUM_MAX_BUCKETS: usize = 262_144;
+    const RUNTIME_ENUM_MAX_NODES_PER_LAYOUT: usize = 65_536;
+    const RUNTIME_ENUM_BUCKET_CHUNK: usize = 4096;
+    const RUNTIME_DEBUG_MAX_ITEMS: usize = 16;
+    const RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES: usize = 3;
     const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
     const RUNTIME_PATTERN_SCAN_CAP: usize = 256 * 1024 * 1024;
     const RUNTIME_REGISTRY_PROBE_NAMES: &[&str] = &[
@@ -3338,6 +3438,15 @@ mod windows_impl {
             .any(|name| lookup_runtime_flag_entry(handle, singleton, name).is_some())
     }
 
+    fn runtime_registry_has_known_flag_by_bucket_scan(handle: HANDLE, singleton: usize) -> bool {
+        !scan_runtime_registry_interesting_entries(handle, singleton).is_empty()
+    }
+
+    fn runtime_registry_has_tracked_flag_resilient(handle: HANDLE, singleton: usize) -> bool {
+        runtime_registry_has_tracked_flag(handle, singleton)
+            || runtime_registry_has_known_flag_by_bucket_scan(handle, singleton)
+    }
+
     fn runtime_candidates_have_probe(
         handle: HANDLE,
         candidates: &[RuntimeRegistryCandidate],
@@ -3380,7 +3489,7 @@ mod windows_impl {
                         .filter(|&p| {
                             p != 0
                                 && runtime_table_header_looks_valid(handle, p)
-                                && runtime_registry_has_tracked_flag(handle, p)
+                                && runtime_registry_has_tracked_flag_resilient(handle, p)
                         })
                     {
                         push_runtime_registry_candidate(
@@ -3523,9 +3632,9 @@ mod windows_impl {
             if str_ptr_end > node.len() {
                 return false;
             }
-            let ptr = u64::from_le_bytes(
-                node[layout.string_offset..str_ptr_end].try_into().unwrap(),
-            ) as usize;
+            let ptr =
+                u64::from_le_bytes(node[layout.string_offset..str_ptr_end].try_into().unwrap())
+                    as usize;
             if ptr == 0 || !read_process_exact(handle, ptr, &mut actual) {
                 return false;
             }
@@ -3550,9 +3659,12 @@ mod windows_impl {
         // layout (MSVC std::list has prev/next at the start), so chain walking
         // itself is layout-independent; what varies is the node's string +
         // entry slot, captured in `NodeLayout`.
-        if let Some(entry) =
-            lookup_runtime_flag_entry_with_layout(handle, singleton, flag_name, STANDARD_NODE_LAYOUT)
-        {
+        if let Some(entry) = lookup_runtime_flag_entry_with_layout(
+            handle,
+            singleton,
+            flag_name,
+            STANDARD_NODE_LAYOUT,
+        ) {
             return Some(entry);
         }
         for &layout in ALTERNATIVE_NODE_LAYOUTS {
@@ -3633,6 +3745,219 @@ mod windows_impl {
         None
     }
 
+    fn runtime_interesting_name(name: &str) -> Option<&'static str> {
+        RUNTIME_OVERRIDE_RULES
+            .iter()
+            .find_map(|rule| (rule.name == name).then_some(rule.name))
+            .or_else(|| {
+                RUNTIME_FLAG_BASELINES
+                    .iter()
+                    .find_map(|baseline| (baseline.name == name).then_some(baseline.name))
+            })
+            .or_else(|| {
+                RUNTIME_REGISTRY_PROBE_NAMES
+                    .iter()
+                    .find_map(|&probe| (probe == name).then_some(probe))
+            })
+    }
+
+    fn read_remote_node_string(handle: HANDLE, node: &[u8], layout: NodeLayout) -> Option<String> {
+        if node.len() < layout.entry_offset + 8 {
+            return None;
+        }
+        let len_end = layout.len_offset.checked_add(8)?;
+        let cap_end = layout.cap_offset.checked_add(8)?;
+        if len_end > node.len() || cap_end > node.len() {
+            return None;
+        }
+
+        let len = u64::from_le_bytes(node[layout.len_offset..len_end].try_into().ok()?) as usize;
+        if len == 0 || len > MAX_IDENT_BODY_LEN + 16 {
+            return None;
+        }
+        let cap = u64::from_le_bytes(node[layout.cap_offset..cap_end].try_into().ok()?);
+        if cap > (MAX_IDENT_BODY_LEN + 32) as u64 {
+            return None;
+        }
+
+        let mut actual = vec![0u8; len];
+        if cap <= layout.inline_string_cap {
+            if len > layout.inline_string_cap as usize {
+                return None;
+            }
+            let str_end = layout.string_offset.checked_add(len)?;
+            if str_end > node.len() {
+                return None;
+            }
+            actual.copy_from_slice(&node[layout.string_offset..str_end]);
+        } else {
+            let ptr_end = layout.string_offset.checked_add(8)?;
+            if ptr_end > node.len() {
+                return None;
+            }
+            let ptr =
+                u64::from_le_bytes(node[layout.string_offset..ptr_end].try_into().ok()?) as usize;
+            if ptr == 0 || !read_process_exact(handle, ptr, &mut actual) {
+                return None;
+            }
+        }
+
+        String::from_utf8(actual).ok()
+    }
+
+    fn scan_runtime_registry_interesting_entries(
+        handle: HANDLE,
+        singleton: usize,
+    ) -> HashMap<&'static str, usize> {
+        let mut out = HashMap::new();
+        let mut table = [0u8; RUNTIME_TABLE_SIZE];
+        if !read_process_exact(
+            handle,
+            singleton.saturating_add(RUNTIME_TABLE_OFFSET_FROM_SINGLETON),
+            &mut table,
+        ) {
+            return out;
+        }
+
+        let sentinel = u64::from_le_bytes(table[0x00..0x08].try_into().unwrap()) as usize;
+        let buckets = u64::from_le_bytes(table[0x10..0x18].try_into().unwrap()) as usize;
+        let mask = u64::from_le_bytes(table[0x28..0x30].try_into().unwrap());
+        let Some(bucket_count) = mask.checked_add(1).and_then(|n| usize::try_from(n).ok()) else {
+            return out;
+        };
+        if buckets == 0
+            || sentinel == 0
+            || bucket_count == 0
+            || bucket_count > RUNTIME_ENUM_MAX_BUCKETS
+        {
+            return out;
+        }
+
+        let layouts =
+            std::iter::once(STANDARD_NODE_LAYOUT).chain(ALTERNATIVE_NODE_LAYOUTS.iter().copied());
+        for layout in layouts {
+            let mut visited_nodes = HashSet::new();
+            let mut nodes_seen = 0usize;
+            let mut bucket_start = 0usize;
+            while bucket_start < bucket_count && nodes_seen < RUNTIME_ENUM_MAX_NODES_PER_LAYOUT {
+                let buckets_this_chunk =
+                    (bucket_count - bucket_start).min(RUNTIME_ENUM_BUCKET_CHUNK);
+                let chunk_bytes = match buckets_this_chunk.checked_mul(16) {
+                    Some(n) => n,
+                    None => break,
+                };
+                let bucket_addr = match buckets.checked_add(bucket_start.saturating_mul(16)) {
+                    Some(addr) => addr,
+                    None => break,
+                };
+                let mut bucket_buf = vec![0u8; chunk_bytes];
+                if !read_process_exact(handle, bucket_addr, &mut bucket_buf) {
+                    bucket_start = bucket_start.saturating_add(buckets_this_chunk);
+                    continue;
+                }
+
+                for bucket in bucket_buf.chunks_exact(16) {
+                    let first = u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
+                    let second =
+                        u64::from_le_bytes(bucket[0x08..0x10].try_into().unwrap()) as usize;
+                    for (mut current, chain_end) in [(second, first), (first, second)] {
+                        if current == 0 || current == sentinel {
+                            continue;
+                        }
+                        let mut node = vec![0u8; layout.node_size];
+                        for _ in 0..RUNTIME_MAX_CHAIN_STEPS {
+                            if nodes_seen >= RUNTIME_ENUM_MAX_NODES_PER_LAYOUT {
+                                break;
+                            }
+                            if current == 0 || current == sentinel || !visited_nodes.insert(current)
+                            {
+                                break;
+                            }
+                            if !read_process_exact(handle, current, &mut node) {
+                                break;
+                            }
+                            nodes_seen = nodes_seen.saturating_add(1);
+
+                            if let Some(name) = read_remote_node_string(handle, &node, layout) {
+                                if let Some(static_name) = runtime_interesting_name(&name) {
+                                    let entry_end = layout.entry_offset + 8;
+                                    if entry_end <= node.len() {
+                                        let entry = u64::from_le_bytes(
+                                            node[layout.entry_offset..entry_end]
+                                                .try_into()
+                                                .unwrap(),
+                                        )
+                                            as usize;
+                                        if entry != 0 {
+                                            out.entry(static_name).or_insert(entry);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if current == chain_end {
+                                break;
+                            }
+                            let next =
+                                u64::from_le_bytes(node[0x08..0x10].try_into().unwrap()) as usize;
+                            if next == 0 || next == current {
+                                break;
+                            }
+                            current = next;
+                        }
+                    }
+                    if nodes_seen >= RUNTIME_ENUM_MAX_NODES_PER_LAYOUT {
+                        break;
+                    }
+                }
+
+                bucket_start = bucket_start.saturating_add(buckets_this_chunk);
+            }
+        }
+
+        out
+    }
+
+    fn record_runtime_resolved_value(
+        out: &mut Vec<String>,
+        seen: &mut HashSet<(&'static str, usize)>,
+        name: &'static str,
+        value_ptr: usize,
+        raw_value: [u8; 4],
+        source: &'static str,
+    ) {
+        if out.len() >= RUNTIME_DEBUG_MAX_ITEMS || !seen.insert((name, value_ptr)) {
+            return;
+        }
+        let observed = i32::from_le_bytes(raw_value);
+        let observed_hex = u32::from_le_bytes(raw_value);
+        out.push(format!(
+            "{}={} (0x{:08X}, {})",
+            name, observed, observed_hex, source
+        ));
+    }
+
+    fn runtime_registry_debug_suffix(
+        enumerated_total: usize,
+        enumerated_summaries: &[String],
+        resolved_values: &[String],
+    ) -> String {
+        let enumerated = if enumerated_summaries.is_empty() {
+            "none".to_string()
+        } else {
+            enumerated_summaries.join("; ")
+        };
+        let resolved = if resolved_values.is_empty() {
+            "none".to_string()
+        } else {
+            resolved_values.join("; ")
+        };
+        format!(
+            " | Enumerated tracked names: {} [{}] | Resolved values: {}",
+            enumerated_total, enumerated, resolved
+        )
+    }
+
     fn inspect_runtime_fflag_registry(
         handle: HANDLE,
         pid: u32,
@@ -3660,13 +3985,39 @@ mod windows_impl {
 
         let mut findings = Vec::new();
         let mut inspected = 0usize;
+        let mut enumerated_total = 0usize;
+        let mut enumerated_summaries = Vec::new();
+        let mut resolved_values = Vec::new();
+        let mut resolved_seen = HashSet::new();
         for candidate in &candidates {
+            let enumerated_entries =
+                scan_runtime_registry_interesting_entries(handle, candidate.singleton);
+            enumerated_total = enumerated_total.saturating_add(enumerated_entries.len());
+            if !enumerated_entries.is_empty()
+                && enumerated_summaries.len() < RUNTIME_DEBUG_MAX_ITEMS
+            {
+                let mut names: Vec<_> = enumerated_entries.keys().copied().collect();
+                names.sort_unstable();
+                names.truncate(RUNTIME_DEBUG_MAX_ITEMS);
+                enumerated_summaries.push(format!(
+                    "0x{:X}: {}",
+                    candidate.singleton,
+                    names.join(",")
+                ));
+            }
             for &rule in RUNTIME_OVERRIDE_RULES {
-                let entry = match lookup_runtime_flag_entry(handle, candidate.singleton, rule.name)
-                {
-                    Some(entry) => entry,
-                    None => continue,
+                let direct_entry =
+                    lookup_runtime_flag_entry(handle, candidate.singleton, rule.name);
+                let entry_source = if direct_entry.is_some() {
+                    "direct"
+                } else {
+                    "bucket-enum"
                 };
+                let entry =
+                    match direct_entry.or_else(|| enumerated_entries.get(rule.name).copied()) {
+                        Some(entry) => entry,
+                        None => continue,
+                    };
                 inspected += 1;
                 let value_ptr = match read_process_u64(
                     handle,
@@ -3679,6 +4030,14 @@ mod windows_impl {
                     Some(raw) => raw,
                     None => continue,
                 };
+                record_runtime_resolved_value(
+                    &mut resolved_values,
+                    &mut resolved_seen,
+                    rule.name,
+                    value_ptr,
+                    raw_value,
+                    entry_source,
+                );
                 if !runtime_rule_matches_observed(rule, raw_value) {
                     continue;
                 }
@@ -3714,21 +4073,33 @@ mod windows_impl {
                     }),
                 ));
             }
+            findings.extend(inspect_runtime_flag_baselines_for_candidate(
+                handle,
+                pid,
+                candidate,
+                &enumerated_entries,
+                &mut resolved_values,
+                &mut resolved_seen,
+            ));
         }
 
-        findings.extend(inspect_runtime_flag_baselines(handle, pid, &candidates));
-
+        let debug_suffix = runtime_registry_debug_suffix(
+            enumerated_total,
+            &enumerated_summaries,
+            &resolved_values,
+        );
         if findings.is_empty() && inspected > 0 {
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
                 "Live FastFlag registry inspected; no curated injected values observed",
                 Some(format!(
-                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Registry entries read: {}",
+                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Registry entries read: {}{}",
                     pid,
                     candidates.len(),
                     heap_table_header_summary,
-                    inspected
+                    inspected,
+                    debug_suffix
                 )),
             ));
         } else if findings.is_empty() {
@@ -3737,10 +4108,11 @@ mod windows_impl {
                 ScanVerdict::Inconclusive,
                 "Live FastFlag registry candidate found, but tracked entries could not be read",
                 Some(format!(
-                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable",
+                    "PID: {} | Singleton candidates: {} | Heap table header candidates: {} | Detection reached registry-like memory, but no probe or curated flag entries were readable{}",
                     pid,
                     candidates.len(),
-                    heap_table_header_summary
+                    heap_table_header_summary,
+                    debug_suffix
                 )),
             ));
         }
@@ -3748,48 +4120,357 @@ mod windows_impl {
         findings
     }
 
-    fn inspect_runtime_flag_baselines(
+    fn inspect_runtime_flag_baselines_for_candidate(
         handle: HANDLE,
         pid: u32,
-        candidates: &[RuntimeRegistryCandidate],
+        candidate: &RuntimeRegistryCandidate,
+        enumerated_entries: &HashMap<&'static str, usize>,
+        resolved_values: &mut Vec<String>,
+        resolved_seen: &mut HashSet<(&'static str, usize)>,
     ) -> Vec<ScanFinding> {
         let mut findings = Vec::new();
 
-        for candidate in candidates {
-            for baseline in RUNTIME_FLAG_BASELINES {
-                let entry =
-                    match lookup_runtime_flag_entry(handle, candidate.singleton, baseline.name) {
-                        Some(entry) => entry,
-                        None => continue,
-                    };
-                let value_ptr = match read_process_u64(
-                    handle,
-                    entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET),
-                ) {
+        for baseline in RUNTIME_FLAG_BASELINES {
+            let direct_entry =
+                lookup_runtime_flag_entry(handle, candidate.singleton, baseline.name);
+            let entry_source = if direct_entry.is_some() {
+                "direct"
+            } else {
+                "bucket-enum"
+            };
+            let entry =
+                match direct_entry.or_else(|| enumerated_entries.get(baseline.name).copied()) {
+                    Some(entry) => entry,
+                    None => continue,
+                };
+            let value_ptr =
+                match read_process_u64(handle, entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET)) {
                     Some(ptr) if ptr != 0 => ptr as usize,
                     _ => continue,
                 };
-                let raw_value = match read_process_i32_bytes(handle, value_ptr) {
-                    Some(raw) => raw,
-                    None => continue,
-                };
-                if runtime_exact_rule_matches_name(baseline.name, raw_value) {
-                    continue;
-                }
-                if let Some(finding) = runtime_flag_baseline_finding(
-                    pid,
-                    baseline,
-                    candidate.singleton,
-                    entry,
-                    value_ptr,
-                    raw_value,
-                ) {
-                    findings.push(finding);
-                }
+            let raw_value = match read_process_i32_bytes(handle, value_ptr) {
+                Some(raw) => raw,
+                None => continue,
+            };
+            record_runtime_resolved_value(
+                resolved_values,
+                resolved_seen,
+                baseline.name,
+                value_ptr,
+                raw_value,
+                entry_source,
+            );
+            if runtime_exact_rule_matches_name(baseline.name, raw_value) {
+                continue;
+            }
+            if let Some(finding) = runtime_flag_baseline_finding(
+                pid,
+                baseline,
+                candidate.singleton,
+                entry,
+                value_ptr,
+                raw_value,
+            ) {
+                findings.push(finding);
             }
         }
 
         findings
+    }
+
+    /// The current MxStrap UI writes a per-PID address cache under a disguised
+    /// RenderConfig folder. Treat that file only as a map: the finding is
+    /// emitted from live Roblox memory reads at the cached addresses.
+    fn render_config_cache_path(pid: u32) -> Option<std::path::PathBuf> {
+        std::env::var_os("APPDATA").map(|appdata| {
+            std::path::PathBuf::from(appdata)
+                .join("Microsoft")
+                .join("RenderConfig")
+                .join(format!("flags_{}.json", pid))
+        })
+    }
+
+    fn render_config_plain_config_path() -> Option<std::path::PathBuf> {
+        std::env::var_os("APPDATA").map(|appdata| {
+            std::path::PathBuf::from(appdata)
+                .join("Microsoft")
+                .join("RenderConfig")
+                .join("render_cfg.dat")
+        })
+    }
+
+    fn render_config_cache_key(flag_name: &str) -> &str {
+        for prefix in [
+            "DFFlag", "FFlag", "DFInt", "FInt", "DFString", "FString", "SFFlag", "SFInt",
+            "SFString", "DFLog", "FLog",
+        ] {
+            if let Some(stripped) = flag_name.strip_prefix(prefix) {
+                return stripped;
+            }
+        }
+        flag_name
+    }
+
+    fn render_config_json_value_label(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => format!("\"{}\"", s),
+            _ => value.to_string(),
+        }
+    }
+
+    fn render_config_config_only_values(
+        cache_obj: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<String> {
+        let Some(config_path) = render_config_plain_config_path() else {
+            return Vec::new();
+        };
+        let Ok(content) = std::fs::read_to_string(config_path) else {
+            return Vec::new();
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Vec::new();
+        };
+        let Some(config_obj) = parsed.as_object() else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for (flag_name, value) in config_obj {
+            if cache_obj.contains_key(render_config_cache_key(flag_name)) {
+                continue;
+            }
+            out.push(format!(
+                "{}={}",
+                flag_name,
+                render_config_json_value_label(value)
+            ));
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn render_config_detail_group(items: &[String]) -> String {
+        if items.is_empty() {
+            return "0".to_string();
+        }
+        let mut out = format!("{} total", items.len());
+        for item in items {
+            out.push('\n');
+            out.push_str("- ");
+            out.push_str(item);
+        }
+        out
+    }
+
+    struct PeSectionMap {
+        virtual_address: usize,
+        virtual_size: usize,
+        raw_ptr: usize,
+        raw_size: usize,
+    }
+
+    struct PeImageDefaults {
+        bytes: Vec<u8>,
+        sections: Vec<PeSectionMap>,
+    }
+
+    fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+        let end = offset.checked_add(2)?;
+        let slice = bytes.get(offset..end)?;
+        Some(u16::from_le_bytes(slice.try_into().ok()?))
+    }
+
+    fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+        let end = offset.checked_add(4)?;
+        let slice = bytes.get(offset..end)?;
+        Some(u32::from_le_bytes(slice.try_into().ok()?))
+    }
+
+    impl PeImageDefaults {
+        fn load(path: Option<&str>) -> Option<Self> {
+            let path = path?;
+            let bytes = std::fs::read(path).ok()?;
+            if bytes.get(0..2)? != b"MZ" {
+                return None;
+            }
+            let pe_offset = read_u32_le(&bytes, 0x3C)? as usize;
+            if bytes.get(pe_offset..pe_offset.checked_add(4)?)? != b"PE\0\0" {
+                return None;
+            }
+            let coff = pe_offset.checked_add(4)?;
+            let section_count = read_u16_le(&bytes, coff.checked_add(2)?)? as usize;
+            let optional_header_size = read_u16_le(&bytes, coff.checked_add(16)?)? as usize;
+            let section_table = coff.checked_add(20)?.checked_add(optional_header_size)?;
+
+            let mut sections = Vec::new();
+            for index in 0..section_count.min(128) {
+                let section = section_table.checked_add(index.checked_mul(40)?)?;
+                let virtual_size = read_u32_le(&bytes, section.checked_add(8)?)? as usize;
+                let virtual_address = read_u32_le(&bytes, section.checked_add(12)?)? as usize;
+                let raw_size = read_u32_le(&bytes, section.checked_add(16)?)? as usize;
+                let raw_ptr = read_u32_le(&bytes, section.checked_add(20)?)? as usize;
+                if virtual_address == 0 || raw_size == 0 {
+                    continue;
+                }
+                sections.push(PeSectionMap {
+                    virtual_address,
+                    virtual_size,
+                    raw_ptr,
+                    raw_size,
+                });
+            }
+            (!sections.is_empty()).then_some(Self { bytes, sections })
+        }
+
+        fn read_i32_at_rva(&self, rva: usize) -> Option<i32> {
+            for section in &self.sections {
+                let mapped_size = section.virtual_size.max(section.raw_size);
+                let section_end = section.virtual_address.checked_add(mapped_size)?;
+                if rva < section.virtual_address || rva.checked_add(4)? > section_end {
+                    continue;
+                }
+                let delta = rva.checked_sub(section.virtual_address)?;
+                if delta.checked_add(4)? > section.raw_size {
+                    return None;
+                }
+                let file_offset = section.raw_ptr.checked_add(delta)?;
+                let bytes = self.bytes.get(file_offset..file_offset.checked_add(4)?)?;
+                return Some(i32::from_le_bytes(bytes.try_into().ok()?));
+            }
+            None
+        }
+    }
+
+    fn inspect_render_config_runtime_overrides(
+        handle: HANDLE,
+        pid: u32,
+        exe_path: Option<&str>,
+    ) -> Vec<ScanFinding> {
+        let Some(cache_path) = render_config_cache_path(pid) else {
+            return Vec::new();
+        };
+        let Ok(content) = std::fs::read_to_string(&cache_path) else {
+            return Vec::new();
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Vec::new();
+        };
+        let Some(obj) = parsed.as_object() else {
+            return Vec::new();
+        };
+
+        let config_only_values = render_config_config_only_values(obj);
+        let image_defaults = PeImageDefaults::load(exe_path);
+        let main_module = main_module_info_windows(handle);
+        let mut exact_matches = Vec::new();
+        let mut changed_cached_values = Vec::new();
+        let mut seen = HashSet::new();
+        let mut exact_cache_keys = HashSet::new();
+        for &rule in RUNTIME_OVERRIDE_RULES {
+            let cache_key = render_config_cache_key(rule.name);
+            let Some(addr) = obj
+                .get(cache_key)
+                .and_then(|value| value.as_u64())
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                continue;
+            };
+            if addr == 0 || !seen.insert((rule.name, addr)) {
+                continue;
+            }
+            let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
+                continue;
+            };
+            if runtime_rule_matches_observed(rule, raw_value) {
+                exact_cache_keys.insert(cache_key.to_string());
+                exact_matches.push(format!(
+                    "{}={} @0x{:X}",
+                    rule.name,
+                    runtime_value_label(rule.value),
+                    addr
+                ));
+            }
+        }
+
+        if let (Some((module_base, module_size)), Some(defaults)) = (main_module, &image_defaults) {
+            for (cache_key, value) in obj {
+                if exact_cache_keys.contains(cache_key) {
+                    continue;
+                }
+                let Some(addr) = value.as_u64().and_then(|value| usize::try_from(value).ok())
+                else {
+                    continue;
+                };
+                let Some(module_end) = module_base.checked_add(module_size) else {
+                    continue;
+                };
+                let Some(value_end) = addr.checked_add(4) else {
+                    continue;
+                };
+                if addr < module_base || value_end > module_end {
+                    continue;
+                }
+                let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
+                    continue;
+                };
+                let live_value = i32::from_le_bytes(raw_value);
+                let rva = addr - module_base;
+                let Some(default_value) = defaults.read_i32_at_rva(rva) else {
+                    continue;
+                };
+                if live_value == default_value {
+                    continue;
+                }
+                changed_cached_values.push(format!(
+                    "{}={} (file default {}) @0x{:X}",
+                    cache_key, live_value, default_value, addr
+                ));
+            }
+        }
+
+        let evidence_count = exact_matches.len() + changed_cached_values.len();
+        if evidence_count == 0 {
+            return Vec::new();
+        }
+
+        let verdict = if evidence_count >= RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES {
+            ScanVerdict::Flagged
+        } else {
+            ScanVerdict::Suspicious
+        };
+        let description = match verdict {
+            ScanVerdict::Flagged => "Critical live Roblox runtime-variable overrides",
+            _ => "Suspicious live Roblox runtime-variable overrides",
+        };
+        let mut detail_fields = vec![
+            format!("PID: {}", pid),
+            format!("Address cache: {}", cache_path.display()),
+            format!("Address-backed live overrides: {}", evidence_count),
+            format!(
+                "Exact curated matches: {}",
+                render_config_detail_group(&exact_matches)
+            ),
+            format!(
+                "Uncurated changed cached values: {}",
+                render_config_detail_group(&changed_cached_values)
+            ),
+        ];
+        if !config_only_values.is_empty() {
+            detail_fields.push(format!(
+                "Config-only values without live address proof: {}",
+                render_config_detail_group(&config_only_values)
+            ));
+        }
+        detail_fields.push(
+            "Detection: read cached live Roblox variable addresses; exact curated values are confirmed directly, and uncurated cached values are reported only when live memory differs from the Roblox executable default".to_string(),
+        );
+
+        vec![ScanFinding::new(
+            "memory_scanner",
+            verdict,
+            description,
+            Some(detail_fields.join(" | ")),
+        )]
     }
 
     /// Read a 4-byte flag value via the node-pointer-chain:
@@ -3844,10 +4525,8 @@ mod windows_impl {
             .iter()
             .map(|(name, _)| name.as_bytes())
             .collect();
-        let static_names: Vec<&'static str> = ANCHOR_BASELINES
-            .iter()
-            .map(|(name, _)| *name)
-            .collect();
+        let static_names: Vec<&'static str> =
+            ANCHOR_BASELINES.iter().map(|(name, _)| *name).collect();
         // Match against any of the anchor names in one O(N) sweep per chunk.
         let ac = match aho_corasick::AhoCorasick::new(&names) {
             Ok(ac) => ac,
@@ -3936,9 +4615,8 @@ mod windows_impl {
                     let aligned_start = (8usize.wrapping_sub(chunk_addr & 0x7)) & 0x7;
                     let mut i = aligned_start;
                     while i + 8 <= chunk {
-                        let value = u64::from_le_bytes(
-                            scratch[i..i + 8].try_into().unwrap(),
-                        ) as usize;
+                        let value =
+                            u64::from_le_bytes(scratch[i..i + 8].try_into().unwrap()) as usize;
                         if value != 0 && known.contains(&value) {
                             let location = chunk_addr.saturating_add(i);
                             table
@@ -3977,9 +4655,7 @@ mod windows_impl {
     /// Candidate entry-field offsets to probe within a node (relative to the
     /// node's string-ptr field). Covers the standard MSVC layout plus shifts
     /// for added/removed bucket prefix fields.
-    const ANCHOR_ENTRY_OFFSET_CANDIDATES: &[usize] = &[
-        0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40,
-    ];
+    const ANCHOR_ENTRY_OFFSET_CANDIDATES: &[usize] = &[0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40];
 
     /// At least this many *distinct* anchor flags must agree on an offset
     /// before we trust it. Three anchors with three different expected
@@ -3995,10 +4671,7 @@ mod windows_impl {
     /// This bypasses singleton resolution, hash function, bucket layout,
     /// and table-header structure — robust against any Roblox client update
     /// that doesn't simultaneously change every anchor flag's default.
-    fn discover_anchor_entry_offset(
-        handle: HANDLE,
-        table: &FlagHitTable,
-    ) -> Option<usize> {
+    fn discover_anchor_entry_offset(handle: HANDLE, table: &FlagHitTable) -> Option<usize> {
         // For each (offset, anchor_name) where we found a value match, track
         // it. The right offset will appear paired with MANY anchor names
         // (each with their own expected value); wrong offsets will only
@@ -4068,16 +4741,16 @@ mod windows_impl {
                 .map(|h| h.address)
                 .collect();
             for string_addr in string_addrs {
-                let pointer_locations = match table.runtime_string_pointer_locations.get(&string_addr) {
-                    Some(locs) => locs.clone(),
-                    None => continue,
-                };
+                let pointer_locations =
+                    match table.runtime_string_pointer_locations.get(&string_addr) {
+                        Some(locs) => locs.clone(),
+                        None => continue,
+                    };
                 for ptr_loc in pointer_locations.iter().take(16) {
-                    let raw_i32 =
-                        match probe_anchor_value(handle, *ptr_loc, entry_field_offset) {
-                            Some(v) => v,
-                            None => continue,
-                        };
+                    let raw_i32 = match probe_anchor_value(handle, *ptr_loc, entry_field_offset) {
+                        Some(v) => v,
+                        None => continue,
+                    };
                     let raw_value_bytes = raw_i32.to_le_bytes();
                     let observed_shape =
                         runtime_value_from_raw(raw_value_bytes, baseline.default_value);
@@ -4508,6 +5181,8 @@ mod windows_impl {
             .map(|v| v.len())
             .sum();
         let main_module_info = main_module_info_windows(handle.0);
+        let render_config_findings =
+            inspect_render_config_runtime_overrides(handle.0, pid, proc.exe_path.as_deref());
         let main_module_desc = main_module_info
             .map(|(b, s)| format!("base=0x{:X} size=0x{:X}", b, s))
             .unwrap_or_else(|| "(none)".to_string());
@@ -4608,11 +5283,8 @@ mod windows_impl {
                 .values()
                 .map(|(raw, _)| *raw)
                 .sum();
-            let binval_total_correlated: usize = table
-                .binary_value_scan_diag
-                .values()
-                .map(|(_, c)| *c)
-                .sum();
+            let binval_total_correlated: usize =
+                table.binary_value_scan_diag.values().map(|(_, c)| *c).sum();
             runtime_non_elevated.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
@@ -4638,6 +5310,7 @@ mod windows_impl {
             .into_iter()
             .chain(node_findings)
             .chain(anchor_findings)
+            .chain(render_config_findings)
         {
             if matches!(
                 finding.verdict,
@@ -4933,6 +5606,10 @@ mod windows_impl {
                 roots.push(format!("{}\\easyanticheat\\", pf_lower));
                 roots.push(format!("{}\\battleye\\", pf_lower));
                 roots.push(format!("{}\\common files\\", pf_lower));
+                roots.push(format!(
+                    "{}\\microsoft\\edgewebview\\application\\",
+                    pf_lower
+                ));
                 // Roblox UWP package family (not the entire Store).
                 if pf_var == "ProgramFiles" {
                     roots.push(format!("{}\\windowsapps\\robloxcorporation.", pf_lower));
@@ -4960,7 +5637,7 @@ mod windows_impl {
         roots
     }
 
-    fn is_trusted_module_path(path_lower: &str) -> bool {
+    pub(super) fn is_trusted_module_path(path_lower: &str) -> bool {
         if path_lower.contains("\\..\\") {
             return false;
         }
@@ -5141,6 +5818,24 @@ mod tests {
             has_fishstrap,
             "Fishstrap Versions path missing from trust list: {roots:?}"
         );
+    }
+
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+    #[test]
+    fn trusted_modules_include_webview2_runtime() {
+        let old_program_files_x86 = std::env::var_os("ProgramFiles(x86)");
+        std::env::set_var("ProgramFiles(x86)", "C:\\Program Files (x86)");
+
+        let path = "c:\\program files (x86)\\microsoft\\edgewebview\\application\\148.0.3967.54\\ebwebview\\x64\\embeddedbrowserwebview.dll";
+        let trusted = windows_impl::is_trusted_module_path(path);
+
+        if let Some(value) = old_program_files_x86 {
+            std::env::set_var("ProgramFiles(x86)", value);
+        } else {
+            std::env::remove_var("ProgramFiles(x86)");
+        }
+
+        assert!(trusted, "WebView2 runtime path must be trusted");
     }
 
     #[test]

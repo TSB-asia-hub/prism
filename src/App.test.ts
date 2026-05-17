@@ -82,6 +82,21 @@ describe("App UI helpers", () => {
     });
   });
 
+  it("preserves multiline grouped finding values", () => {
+    expect(
+      parseFindingDetails(
+        "PID: 1848 | Exact curated matches: 2 total\n- A=1\n- B=2 | Detection: live",
+      ),
+    ).toEqual({
+      fields: [
+        { label: "PID", value: "1848" },
+        { label: "Exact curated matches", value: "2 total\n- A=1\n- B=2" },
+        { label: "Detection", value: "live" },
+      ],
+      freeform: null,
+    });
+  });
+
   it("splits comma detail fields only at capitalized key boundaries", () => {
     expect(
       parseFindingDetails("Path: C:\\Roblox, Player\\Client.exe, Hash: abc123"),
