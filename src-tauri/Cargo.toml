@@ -1,6 +1,6 @@
 [package]
 name = "prism"
-version = "0.8.1"
+version = "0.8.2"
 description = "Prism — tournament integrity tool for Roblox FFlag detection"
 authors = ["TSBCC"]
 edition = "2021"
