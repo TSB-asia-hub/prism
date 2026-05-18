@@ -217,6 +217,34 @@ const INJECTOR_TOOL_MARKERS: &[&str] = &[
     "wenbootstrapper",
     "wen bootstrapper",
     "wenstrap",
+    // ---- 2025-2026 runtime injector ecosystem (Roblox-Offsets-Website pipeline) ----
+    // Tools in this group bypass the September-2025 ClientAppSettings allowlist
+    // by writing values directly into the live FastVariable hash table via
+    // OpenProcess + WriteProcessMemory. They typically pull per-build offsets
+    // from a public offset service. Markers below are exe/config names,
+    // service URLs, or Lua-API leaks that should never appear in the heap
+    // of a clean Roblox client.
+    //
+    // Sources:
+    //   - https://github.com/nikitaxyxz/fflag-injector
+    //   - https://github.com/pumpkinbunny/fflag-manager
+    //   - https://github.com/velostrap/Velostrap
+    //   - https://github.com/espresso-soft/proxy-fastflags
+    //   - https://hybrid-analysis.com sample d0d98d43… (nikitaxyxz)
+    "fastflag_injector",
+    "fastflag_injector_gui_enhanced",
+    "fflagtoolkit",
+    "fflag toolkit",
+    "fflag_toolkit",
+    "velostrap",
+    "masterstrap",
+    "flag browser",
+    "proxy-fastflags",
+    // rbxoffsets.xyz — community offset service most external runtime
+    // injectors outsource per-build offsets from (per fantaize.net 2026
+    // desync writeup). The literal hostname never appears in vanilla Roblox.
+    "rbxoffsets.xyz",
+    "rbxoffsets",
 ];
 
 #[derive(Clone, Copy)]
@@ -748,6 +776,303 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Int(10_000),
         string_scan_promote: false,
     },
+    // ============================================================
+    // 2026 expansion — values observed in public injection configs
+    // (luafv/rbxflags, alexbomb6666/rblxflags, Dantezz025/Roblox-Fast-Flags,
+    // stxzqv/Ultimate-fflag-Pack, fantaize.net 2026-01-07 desync writeup).
+    //
+    // Curation discipline still applies:
+    //   * bool rules: string_scan_promote: false (registry-path only).
+    //   * int rules: string_scan_promote: true ONLY when the value is so
+    //     out-of-band that no shipping Roblox client could plausibly use it
+    //     as a default (heavy negative, near INT_MAX, or absurdly small).
+    // ============================================================
+
+    // --- DFIntS2PhysicsSenderRate small absurd extras ---
+    // value 3 documented as Dantezz025 desync preset (chained with TaskScheduler bomb)
+    RuntimeOverrideRule {
+        name: "DFIntS2PhysicsSenderRate",
+        value: RuntimeFlagValue::Int(3),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntDataSenderMaxBandwidthBps (luafv "Increase Ping" preset) ---
+    // Absurdly low for a real connection; only seen in cheat configs.
+    RuntimeOverrideRule {
+        name: "DFIntDataSenderMaxBandwidthBps",
+        value: RuntimeFlagValue::Int(150),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDataSenderMaxBandwidthBps",
+        value: RuntimeFlagValue::Int(555),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntWorldStepMax (devforum 3911546, 4011364 — WorldStepMax desync) ---
+    // Negative values disable other-client physics replication entirely.
+    RuntimeOverrideRule {
+        name: "DFIntWorldStepMax",
+        value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntMaxMissedWorldStepsRemembered extra extreme: slow-motion ---
+    RuntimeOverrideRule {
+        name: "DFIntMaxMissedWorldStepsRemembered",
+        value: RuntimeFlagValue::Int(1),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntSimBroadPhasePairCountMax — noclip 2 (luafv) ---
+    // Vanilla default is large (thousands+); 50 forces broad-phase to drop
+    // collision pairs, producing noclip.
+    RuntimeOverrideRule {
+        name: "DFIntSimBroadPhasePairCountMax",
+        value: RuntimeFlagValue::Int(50),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntMaxAltitudePDStickHipHeightPercent — hip-height bounce/hover ---
+    RuntimeOverrideRule {
+        name: "DFIntMaxAltitudePDStickHipHeightPercent",
+        value: RuntimeFlagValue::Int(-200),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntDebugSimPrimalLineSearch — freeze/fly/void presets (luafv) ---
+    // Vanilla default appears to be 100 per luafv commentary.
+    //   0   = freeze (registry-only; 0 plausibly appears in other code paths)
+    //   3   = low-gravity / fly (promote — 3 not plausibly vanilla for this knob)
+    //   222 = void unanchored parts (promote — 222 explicitly cheat-only)
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalLineSearch",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalLineSearch",
+        value: RuntimeFlagValue::Int(3),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalLineSearch",
+        value: RuntimeFlagValue::Int(222),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntDebugSimPrimalStiffnessMin/Max — Dantezz "Invisible 3 BEST" ---
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalStiffnessMin",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalStiffnessMax",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+
+    // --- Cull factor pixel thresholds (luafv "Xray", "Semi Fullbright") ---
+    // 10000 is at the documented cheat threshold; INT_MAX is sentinel-cheat.
+    // Promote only the INT_MAX form — 10000 might conceivably appear in
+    // legit quality-tuning presets, so leave it registry-only.
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewHighQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewHighQuality",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewLowQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewLowQuality",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapHighQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapHighQuality",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapLowQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapLowQuality",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+
+    // --- Physics-solver crash exploits (luafv "omg i can't believe Roblox") ---
+    // No legitimate Roblox client uses tens-of-millions or INT_MAX for these
+    // bucket-size knobs; the only known purpose is OOM-crashing other clients.
+    RuntimeOverrideRule {
+        name: "FIntPhysicsGridHierarchyLowestLevelInitBinCount",
+        value: RuntimeFlagValue::Int(199_999_999),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsGridHierarchyLowestLevelInitBinCountWorldModel",
+        value: RuntimeFlagValue::Int(100_000_000),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsSolverCollisionPoolBucketSize",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsSolverCollisionPoolBucketSizeWorldModel",
+        value: RuntimeFlagValue::Int(i32::MAX),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntTimestepArbiterThresholdCFLThou = 0 (engine crash, luafv) ---
+    // Vanilla ~300. 0 is plausible in *some* code paths so registry-only.
+    RuntimeOverrideRule {
+        name: "DFIntTimestepArbiterThresholdCFLThou",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+
+    // --- DFIntRemoteEventSingleInvocationSizeLimit = 1 (anti-cheat bypass) ---
+    // Server-side anti-cheat that uses RemoteEvents gets starved.
+    // No engineering reason to set this to 1 in any vanilla build.
+    RuntimeOverrideRule {
+        name: "DFIntRemoteEventSingleInvocationSizeLimit",
+        value: RuntimeFlagValue::Int(1),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntRenderClampRoughnessMax = -640_000_000 (metallic avatars) ---
+    RuntimeOverrideRule {
+        name: "DFIntRenderClampRoughnessMax",
+        value: RuntimeFlagValue::Int(-640_000_000),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntDebugSimPhysicsSteppingMethodOverride = 10_000_000 (speed cheat) ---
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPhysicsSteppingMethodOverride",
+        value: RuntimeFlagValue::Int(10_000_000),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntNewRunningBaseGravityReductionFactorHundredth = 1500 (super jump) ---
+    // Vanilla likely ~100; 1500 is super-jump preset (luafv).
+    RuntimeOverrideRule {
+        name: "DFIntNewRunningBaseGravityReductionFactorHundredth",
+        value: RuntimeFlagValue::Int(1500),
+        string_scan_promote: true,
+    },
+
+    // --- DFIntNonSolidFloorPercentForceApplication extra (tool fly) ---
+    RuntimeOverrideRule {
+        name: "DFIntNonSolidFloorPercentForceApplication",
+        value: RuntimeFlagValue::Int(-12_000),
+        string_scan_promote: true,
+    },
+
+    // --- Unstick force attack negative (wallglide) ---
+    RuntimeOverrideRule {
+        name: "DFIntUnstickForceAttackInTenths",
+        value: RuntimeFlagValue::Int(-4),
+        string_scan_promote: false,
+    },
+
+    // --- Bool rules (registry-path only per curation discipline) ---
+    // Animator-skeleton ESP chain (devforum 3790477; Roblox staff confirmed).
+    RuntimeOverrideRule {
+        name: "DFFlagAnimatorDrawSkeletonAll",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagAnimatorDrawSkeletonAttachments",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagAnimatorDrawSkeletonText",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    // NOTE: DFFlagDebugDrawEnable=true is the *vanilla* baseline (see pin
+    // test `debug_draw_enable_true_default_is_not_live_registry_override_rule`).
+    // Detection for the wallhack/ESP debug-draw chain still works through
+    // the more specific child flags (DFFlagDebugDrawBroadPhaseAABBs,
+    // DFFlagDebugDrawBvhNodes, AnimatorDrawSkeleton*), which DO have safe
+    // `Bool(true)` rules below.
+    RuntimeOverrideRule {
+        name: "FFlagDebugAvatarChatVisualization",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagOrder66",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FFlagOverridePlayerVerifiedBadge",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugDisableTimeoutDisconnect",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    // NOTE: The following bool rules were considered but deliberately
+    // omitted because their vanilla defaults are uncertain across Roblox
+    // builds and the v0.6.6 NextGen* false-positive incident shows the
+    // cost of an incorrect bool default in this path. They remain
+    // detectable through the heap string-scan + injector marker context
+    // path (their names are in CRITICAL_FLAGS / HIGH_FLAGS), just not
+    // through bare live-registry inspection:
+    //   - FFlagSimAdaptiveTimesteppingDefault2
+    //   - DFFlagSimHumanoidTimestepModelUpdate
+    //   - FFlagDebugSimDefaultPrimalSolver
+    //   - DFFlagPhysicsSkipNonRealTimeHumanoidForceCalc2
+    RuntimeOverrideRule {
+        name: "FFlagDebugEnableOctreeValidation",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    // NOTE: LargeReplicator* `Bool(true)` rules are deliberately omitted.
+    // Captured clean-Roblox memory exports show these as vanilla baseline
+    // true (see pin test `large_replicator_true_defaults_are_not_live_…`).
+    // The fantaize.net 2026 desync writeup identifies the cheat as a
+    // toggle-pattern (write true→false→true within ~40ms) rather than a
+    // single value; static reads will see the vanilla state in steady
+    // state, so a value-equality rule has no detection value here. The
+    // toggle pattern is observable via heartbeat-snapshotting, which is a
+    // separate detection capability that can be added later. For the
+    // string-scan / file-route paths, these names still surface as
+    // CRITICAL_FLAGS entries when present in injected configs.
+
+    // NOTE: NextGenReplicator*Read3 and *WriteServerSynchronized are also
+    // deliberately omitted from the live-registry rules. The fragility
+    // note on `RUNTIME_OVERRIDE_RULES` documents the v0.6.6 NextGen* bool
+    // flip that mass-flagged vanilla clients. The marker-context path
+    // (their names in CRITICAL_FLAGS) is the conservative path; adding
+    // bare-value rules here only after a clean-Roblox snapshot confirms
+    // they are false by default in current builds.
 ];
 
 /// Aggregated state for high-risk strings that offset-based FFlag injectors
@@ -1600,8 +1925,10 @@ fn runtime_flag_baseline_finding(
             runtime_value_label(baseline.default_value)
         ),
         Some(format!(
-            "PID: {} | Singleton: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Note: {}",
-            pid, singleton, entry, value_ptr, baseline.note
+            "PID: {} | Singleton: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Default: {} | Note: {}",
+            pid, singleton, entry, value_ptr,
+            runtime_value_label(baseline.default_value),
+            baseline.note
         )),
     ))
 }
@@ -1629,13 +1956,14 @@ fn runtime_node_baseline_finding(
             runtime_value_label(baseline.default_value)
         ),
         Some(format!(
-            "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Note: {}",
+            "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Default: {} | Note: {}",
             pid,
             candidate.node_address,
             candidate.string_address,
             candidate.entry,
             value_ptr,
             node_entry_summary,
+            runtime_value_label(baseline.default_value),
             baseline.note
         )),
     ))
@@ -1645,6 +1973,58 @@ fn runtime_baseline_for_name(name: &str) -> Option<&'static RuntimeFlagBaseline>
     RUNTIME_FLAG_BASELINES
         .iter()
         .find(|baseline| baseline.name == name)
+}
+
+/// Best-effort vanilla default for a runtime override rule's flag, used by
+/// the UI to show "injected_value [strikethrough original]". Returns `None`
+/// when the default is not reliably known — the UI then renders the
+/// injected value alone instead of a fake strikethrough.
+///
+/// Curation discipline: only add an entry here if you have at least two
+/// independent sources confirming Roblox's shipping default. A wrong default
+/// is purely cosmetic in this code path (no verdict consequence — the
+/// finding is already emitted before this lookup), but a wrong default
+/// would mislead the operator reviewing the case.
+///
+/// Defaults sourced from:
+///   - `RUNTIME_FLAG_BASELINES` (already curated, single source of truth).
+///   - Roblox DevForum staff posts confirming "default 0/false".
+///   - luafv/rbxflags inline annotations like "Default: 100".
+fn runtime_known_default_label(name: &str) -> Option<String> {
+    if let Some(baseline) = runtime_baseline_for_name(name) {
+        return Some(runtime_value_label(baseline.default_value));
+    }
+    // Defaults verified from Roblox DevForum staff comments + luafv inline
+    // annotations. Only "false" booleans included — bool defaults are stable
+    // in practice (Roblox rarely flips a debug-draw default to true), while
+    // bool flag toggles between builds risk false-strikethrough display.
+    let label = match name {
+        // ESP / wallhack debug bools — must be off in every shipping client.
+        "DFFlagAnimatorDrawSkeletonAll"
+        | "DFFlagAnimatorDrawSkeletonAttachments"
+        | "DFFlagAnimatorDrawSkeletonText"
+        | "DFFlagDebugDrawEnable"
+        | "DFFlagDebugDrawBroadPhaseAABBs"
+        | "DFFlagDebugDrawBvhNodes"
+        | "FFlagDebugAvatarChatVisualization"
+        | "FFlagDebugHumanoidRendering"
+        | "FFlagDebugEnableOctreeValidation"
+        | "FFlagDebugLightGridShowChunks" => "false",
+        // Verified-badge spoof — vanilla never enables this on every player.
+        "FFlagOverridePlayerVerifiedBadge" => "false",
+        // Anti-monetization griefing toggle — disabled by default.
+        "DFFlagOrder66" => "false",
+        // Anti-cheat / safety toggles vanilla keeps off.
+        "DFFlagDebugDisableTimeoutDisconnect" => "false",
+        // Disable-post-fx / sim-radius bool cheats — vanilla off/false.
+        "FFlagDisablePostFx"
+        | "FFlagDebugUseCustomSimRadius"
+        | "DFFlagDebugPhysicsSenderDoesNotShrinkSimRadius" => "false",
+        // Don't-render UI cheats — vanilla off.
+        "FFlagDebugDontRenderScreenGui" | "FFlagDebugDontRenderUI" => "false",
+        _ => return None,
+    };
+    Some(label.to_string())
 }
 
 fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
@@ -2886,16 +3266,20 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                     ScanVerdict::Suspicious => "Suspicious runtime FFlag injection evidence",
                     ScanVerdict::Clean | ScanVerdict::Inconclusive => "Runtime FFlag evidence",
                 };
+                let default_segment = runtime_known_default_label(name)
+                    .map(|d| format!(" | Default: {}", d))
+                    .unwrap_or_default();
                 out.push(ScanFinding::new(
                     "memory_scanner",
                     verdict,
                     format!("{}: \"{}\" = {}", label, name, sample.value),
                     Some(format!(
-                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{} | Context: value was within {} bytes of injector/offset-tool provenance | Observed markers: {}",
+                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{}{} | Context: value was within {} bytes of injector/offset-tool provenance | Observed markers: {}",
                         sample.address,
                         encoding,
                         hit.count,
                         category,
+                        default_segment,
                         desc,
                         INJECTOR_CONTEXT_WINDOW_BYTES,
                         sample.context_summary.as_deref().unwrap_or("unknown")
@@ -2914,6 +3298,9 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                     .map(|d| format!(" | {}", d))
                     .unwrap_or_default();
                 let encoding = if sample.wide { "utf16" } else { "ascii" };
+                let default_segment = runtime_known_default_label(name)
+                    .map(|d| format!(" | Default: {}", d))
+                    .unwrap_or_default();
                 out.push(ScanFinding::new(
                     "memory_scanner",
                     ScanVerdict::Suspicious,
@@ -2922,11 +3309,12 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                         name, sample.value
                     ),
                     Some(format!(
-                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{} | Detection: parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious)",
+                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{}{} | Detection: parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious)",
                         sample.address,
                         encoding,
                         hit.count,
                         category,
+                        default_segment,
                         desc,
                     )),
                 ));
@@ -4063,6 +4451,9 @@ mod windows_impl {
                         "Live FastFlag registry override"
                     }
                 };
+                let default_segment = runtime_known_default_label(rule.name)
+                    .map(|d| format!(" | Default: {}", d))
+                    .unwrap_or_default();
                 findings.push(ScanFinding::new(
                     "memory_scanner",
                     verdict,
@@ -4080,8 +4471,8 @@ mod windows_impl {
                                 format!("{} at table 0x{:X}", candidate.source, candidate.table)
                             });
                         format!(
-                            "PID: {} | Singleton: 0x{:X} via {} | Registry entry: 0x{:X} | Value address: 0x{:X} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
-                            pid, candidate.singleton, origin, entry, value_ptr
+                            "PID: {} | Singleton: 0x{:X} via {} | Registry entry: 0x{:X} | Value address: 0x{:X}{} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                            pid, candidate.singleton, origin, entry, value_ptr, default_segment
                         )
                     }),
                 ));
@@ -4919,6 +5310,9 @@ mod windows_impl {
                         "Live FastFlag registry override"
                     }
                 };
+                let default_segment = runtime_known_default_label(rule.name)
+                    .map(|d| format!(" | Default: {}", d))
+                    .unwrap_or_default();
                 findings.push(ScanFinding::new(
                     "memory_scanner",
                     verdict,
@@ -4929,13 +5323,14 @@ mod windows_impl {
                         runtime_value_label(rule.value)
                     ),
                     Some(format!(
-                        "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Detection: resolved Roblox FastFlag node storage and read the live value storage used by memory injectors",
+                        "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {}{} | Detection: resolved Roblox FastFlag node storage and read the live value storage used by memory injectors",
                         pid,
                         candidate.node_address,
                         candidate.string_address,
                         candidate.entry,
                         value_ptr,
-                        node_entry_summary
+                        node_entry_summary,
+                        default_segment
                     )),
                 ));
                 emitted_exact_rule = true;
@@ -7515,6 +7910,356 @@ mod tests {
                 .all(|f| matches!(f.verdict, ScanVerdict::Clean)),
             "unknown flag without context must stay clean, got: {:?}",
             findings
+        );
+    }
+
+    // ===========================================================
+    // 2026 expansion — coverage tests for newly added rules.
+    //
+    // Each new rule needs (a) a positive test proving the curated cheat
+    // value fires the value-match / context path, and (b) a negative test
+    // proving a plausibly-vanilla value of the same flag does NOT fire.
+    // ===========================================================
+
+    #[test]
+    fn data_sender_max_bandwidth_150_is_promoted_via_value_match() {
+        // luafv "Increase Ping" preset uses DFIntDataSenderMaxBandwidthBps=150.
+        let b = bytes(r#"{"DFIntDataSenderMaxBandwidthBps":150}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100000, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntDataSenderMaxBandwidthBps")
+                    && f.description.contains("= 150")
+            }),
+            "promoted cheat-value rule must fire on its curated value, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn data_sender_max_bandwidth_plausibly_vanilla_value_does_not_fire() {
+        // Vanilla bandwidth caps are large positive numbers. 150_000 here is
+        // arbitrary "looks like a real bandwidth value" — must not match the
+        // curated 150 / 555 rules.
+        let b = bytes(r#"{"DFIntDataSenderMaxBandwidthBps":150000}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100100, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "non-cheat value must not fire promoted rule, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn physics_solver_collision_pool_intmax_is_promoted() {
+        // Crash-exploit value (luafv): INT_MAX forces unbounded allocation.
+        let payload = format!(
+            r#"{{"FIntPhysicsSolverCollisionPoolBucketSize":{}}}"#,
+            i32::MAX
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(payload.as_bytes(), 0x100200, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
+                    && f.description.contains("FIntPhysicsSolverCollisionPoolBucketSize")
+            }),
+            "INT_MAX bucket size must fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn physics_solver_collision_pool_small_positive_is_not_promoted() {
+        // Plausibly vanilla values (small / moderate positive) must not fire.
+        let b = bytes(r#"{"FIntPhysicsSolverCollisionPoolBucketSize":1024}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100300, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "plausibly-vanilla bucket size must not fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn cull_factor_pixel_threshold_intmax_is_promoted() {
+        // luafv "Semi Fullbright" preset uses INT_MAX cull thresholds to
+        // skip occlusion / shadow culling entirely (xray effect).
+        let payload = format!(
+            r#"{{"DFIntCullFactorPixelThresholdMainViewHighQuality":{}}}"#,
+            i32::MAX
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(payload.as_bytes(), 0x100400, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntCullFactorPixelThresholdMainViewHighQuality")
+            }),
+            "INT_MAX cull threshold must fire (xray exploit), got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn cull_factor_pixel_threshold_small_value_is_not_promoted() {
+        // 256 looks like a plausible quality knob value. Must NOT match the
+        // promoted 10000 or INT_MAX rules.
+        let b = bytes(r#"{"DFIntCullFactorPixelThresholdMainViewHighQuality":256}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100500, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "non-cheat cull-factor value must not fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn remote_event_single_invocation_size_limit_one_is_promoted() {
+        // Value 1 (Dantezz preset) starves server-side anti-cheat that uses
+        // RemoteEvents. No legit Roblox build uses 1 here.
+        let b = bytes(r#"{"DFIntRemoteEventSingleInvocationSizeLimit":1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100600, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFIntRemoteEventSingleInvocationSizeLimit")
+            }),
+            "anti-cheat-bypass value 1 must fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn world_step_max_negative_one_is_promoted() {
+        // devforum 4011364 — WorldStepMax negative breaks other-client
+        // physics replication.
+        let b = bytes(r#"{"DFIntWorldStepMax":-1}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100700, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
+                    && f.description.contains("DFIntWorldStepMax")
+            }),
+            "WorldStepMax=-1 must fire (desync exploit), got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn world_step_max_normal_positive_is_not_promoted() {
+        // Plausible vanilla value range. 30 is roughly the physics-step
+        // budget on many tickrates and must not be mistaken for a cheat.
+        let b = bytes(r#"{"DFIntWorldStepMax":30}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100800, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "normal WorldStepMax must not fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn debug_sim_primal_line_search_three_is_promoted() {
+        // luafv: value 3 = low-gravity / fly. Vanilla default 100 per
+        // luafv inline annotation.
+        let b = bytes(r#"{"DFIntDebugSimPrimalLineSearch":3}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100900, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
+                    && f.description.contains("DFIntDebugSimPrimalLineSearch")
+                    && f.description.contains("= 3")
+            }),
+            "primal line search = 3 must fire (fly exploit), got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn debug_sim_primal_line_search_vanilla_default_does_not_fire() {
+        // luafv documents the vanilla default as 100. Must not fire on the
+        // canonical value.
+        let b = bytes(r#"{"DFIntDebugSimPrimalLineSearch":100}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100A00, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "vanilla default 100 must not fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn animator_draw_skeleton_all_is_present_in_registry_rules() {
+        // Sanity: the Roblox-staff-confirmed ESP cheat flag must be present
+        // as a bool registry rule (string_scan_promote=false; this is the
+        // live registry / heap-context path only). Validates the rule isn't
+        // accidentally dropped by future curation passes.
+        let present = RUNTIME_OVERRIDE_RULES.iter().any(|rule| {
+            rule.name == "DFFlagAnimatorDrawSkeletonAll"
+                && rule.value == RuntimeFlagValue::Bool(true)
+                && !rule.string_scan_promote
+        });
+        assert!(present, "AnimatorDrawSkeletonAll registry rule must exist");
+    }
+
+    #[test]
+    fn large_replicator_remains_excluded_from_rules() {
+        // Companion to `large_replicator_true_defaults_are_not_…`. This
+        // re-asserts the omission after the 2026 rule expansion, so a
+        // future "add LargeReplicator" patch trips both tests and the
+        // mistake can't slip through a partial revert.
+        for name in [
+            "LargeReplicatorEnabled9",
+            "LargeReplicatorSerializeWrite4",
+            "LargeReplicatorSerializeRead3",
+            "LargeReplicatorWrite5",
+            "LargeReplicatorRead5",
+        ] {
+            assert!(
+                !RUNTIME_OVERRIDE_RULES
+                    .iter()
+                    .any(|rule| rule.name == name),
+                "{} must not be a runtime override rule (vanilla baseline true)",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn known_default_label_omits_uncertain_bools() {
+        // The default-label helper must not emit defaults for flags whose
+        // vanilla state we are uncertain about — otherwise the UI would
+        // show a misleading strikethrough on a value that might be the
+        // real default in some Roblox builds.
+        for name in [
+            "FFlagSimAdaptiveTimesteppingDefault2",
+            "DFFlagSimHumanoidTimestepModelUpdate",
+            "FFlagDebugSimDefaultPrimalSolver",
+            "DFFlagPhysicsSkipNonRealTimeHumanoidForceCalc2",
+            "FFlagNextGenReplicatorEnabledRead3",
+            "DFFlagNextGenReplicatorEnabledWriteServerSynchronized",
+            "LargeReplicatorEnabled9",
+        ] {
+            assert!(
+                runtime_known_default_label(name).is_none(),
+                "{} has uncertain vanilla default; must not be in default-label table",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn known_default_label_returns_baseline_default_when_available() {
+        // For flags in RUNTIME_FLAG_BASELINES the helper must delegate to
+        // baseline.default_value rather than fall back to its name table.
+        let label = runtime_known_default_label("DFIntS2PhysicsSenderRate");
+        assert_eq!(label.as_deref(), Some("15"));
+    }
+
+    #[test]
+    fn known_default_label_returns_false_for_confirmed_cheat_bools() {
+        // Sanity: confirmed cheat-only bool flags must report "false" as
+        // their default so the UI can render the strikethrough on the
+        // injected "true".
+        assert_eq!(
+            runtime_known_default_label("DFFlagAnimatorDrawSkeletonAll").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            runtime_known_default_label("FFlagOverridePlayerVerifiedBadge").as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn detail_string_includes_default_field_when_known() {
+        // The frontend parser keys on " | Default: <value>" to render the
+        // strikethrough-original next to the injected value. This test pins
+        // that the format hasn't drifted in the marker-context emission path.
+        let mut table = FlagHitTable::default();
+        table.record_with_value(
+            "DFIntS2PhysicsSenderRate",
+            0x110000,
+            false,
+            Some("-30".to_string()),
+            Some("fflags.json, address.json".to_string()),
+        );
+
+        let findings = findings_from_table(&table);
+        let f = findings
+            .iter()
+            .find(|f| f.description.contains("DFIntS2PhysicsSenderRate") && f.description.contains("= -30"))
+            .expect("override finding must be emitted");
+        let details = f
+            .details
+            .as_deref()
+            .expect("override finding must have details");
+        assert!(
+            details.contains(" | Default: 15"),
+            "details must carry Default: <baseline> for the UI parser, got: {}",
+            details
+        );
+    }
+
+    #[test]
+    fn detail_string_omits_default_field_for_unknown_default() {
+        // Verifies the symmetric case: a rule whose default we do NOT know
+        // must not synthesize a fake Default segment.
+        let mut table = FlagHitTable::default();
+        table.record_with_value(
+            "DFIntCullFactorPixelThresholdMainViewHighQuality",
+            0x110100,
+            false,
+            Some(i32::MAX.to_string()),
+            None,
+        );
+        let findings = findings_from_table(&table);
+        let f = findings
+            .iter()
+            .find(|f| {
+                f.description
+                    .contains("DFIntCullFactorPixelThresholdMainViewHighQuality")
+            })
+            .expect("override finding must be emitted");
+        let details = f.details.as_deref().unwrap_or("");
+        // No "Default: " field expected for unknown-default flags.
+        assert!(
+            !details.contains(" | Default: "),
+            "must not emit Default field when default unknown, got: {}",
+            details
         );
     }
 }

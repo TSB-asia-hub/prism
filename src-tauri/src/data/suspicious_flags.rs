@@ -147,6 +147,31 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     // ---- Server connection manipulation ----
     "FFlagDebugLocalRccServerConnection",
     "FFlagRefactorPlayerConnect",
+    // ---- 2026 NextGen replicator companions (Aurora invisibility chain) ----
+    // Documented in fantaize.net 2026-01-07 desync writeup as part of the
+    // toggle-pattern that breaks other clients' replicator state.
+    "FFlagNextGenReplicatorEnabledRead3",
+    "DFFlagNextGenReplicatorEnabledWriteServerSynchronized",
+    // ---- DataSender bandwidth (forced high ping / packet starvation) ----
+    // luafv "Increase Ping" preset sets DFIntDataSenderMaxBandwidthBps=150.
+    // Absurdly low for a real connection; only seen in cheat configs.
+    "DFIntDataSenderMaxBandwidthBps",
+    // ---- Render config / physics crash exploits ----
+    // luafv "omg i can't believe Roblox..." preset uses INT_MAX-ish values
+    // on these flags to force the physics solver to allocate unbounded buckets.
+    // Used to crash other clients in shared experiences.
+    "FIntPhysicsGridHierarchyLowestLevelInitBinCount",
+    "FIntPhysicsGridHierarchyLowestLevelInitBinCountWorldModel",
+    "FIntPhysicsSolverCollisionPoolBucketSize",
+    "FIntPhysicsSolverCollisionPoolBucketSizeWorldModel",
+    // ---- Timestep arbiter CFL threshold (engine crash) ----
+    // Vanilla default ~300; value 0 crashes the physics step (luafv).
+    "DFIntTimestepArbiterThresholdCFLThou",
+    // ---- Sim primal stiffness extra rule names ----
+    // Companion names to DFIntDebugSimPrimalStiffness used in
+    // Dantezz "Invisible 3 BEST" preset alongside the base name.
+    "DFIntDebugSimPrimalStiffnessMin",
+    "DFIntDebugSimPrimalStiffnessMax",
 ];
 
 // =============================================================================
@@ -170,11 +195,26 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FFlagDebugHumanoidRendering",
     // Highlight outlines (can be abused for ESP on mobile)
     "FFlagHighlightOutlinesOnMobile",
+    // Skeleton ESP text overlay (bone labels through walls). Companion to
+    // DFFlagAnimatorDrawSkeletonAll, documented on the Roblox DevForum
+    // post 3790477 as part of the animator-skeleton ESP exploit chain.
+    "DFFlagAnimatorDrawSkeletonText",
+    // Octree validation visualizer — outlines spatial-tree partitions
+    // (wallhack-adjacent). Different name variant than DFFlagEnableOctreeDebugDraw.
+    "FFlagDebugEnableOctreeValidation",
     // ---- X-ray / fog / see-through ----
     // Far Z plane = 1 creates x-ray camera (see through terrain/parts)
     "FIntCameraFarZPlane",
     // Restrict GC distance = 1 makes most geometry invisible
     "DFIntDebugRestrictGCDistance",
+    // Cull-factor pixel thresholds — when set to extreme values (10000+
+    // or INT_MAX) the renderer treats every pixel as below threshold and
+    // skips occlusion culling, producing an x-ray effect. Documented as
+    // "Xray" and "Semi Fullbright" presets in luafv/rbxflags. Main-view
+    // ShadowMap variants were already covered; adding the main-view
+    // pair here so the parser surfaces them when injected.
+    "DFIntCullFactorPixelThresholdMainViewHighQuality",
+    "DFIntCullFactorPixelThresholdMainViewLowQuality",
     // ---- Camera manipulation (zoom/FOV advantage) ----
     // Extreme zoom distance gives sniper-like view in close-quarters games
     "FIntCameraMaxZoomDistance",
@@ -389,6 +429,10 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FStringInGameMenuModernizationStickyBarForcedUserIds",
     // ---- Order66 (misc debug flag) ----
     "DFFlagOrder66",
+    // ---- Verified-badge spoof (clientsided social-engineering) ----
+    // Renders a fake "verified" badge next to every player on the local
+    // client. Documented in luafv as "Override Player Verified Badge".
+    "FFlagOverridePlayerVerifiedBadge",
     // (Quaternion/RigScale animation-system corrections are Roblox-side
     // migration fixes; moved to MEMORY_BASELINE_FLAGS.)
 
@@ -520,6 +564,16 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "DFIntMaxActiveAnimationTracks" => Some("Max active animation tracks. Value 0 freezes all animations."),
         "DFIntDebugSimPrimalLineSearch" => Some("Primal solver line search. Various values cause gravity/flight exploits."),
         "DFIntDebugSimPrimalStiffness" => Some("Primal solver stiffness. Value 0 disables physics constraints (noclip)."),
+        "DFIntDebugSimPrimalStiffnessMin" => Some("Primal solver minimum stiffness companion. Value 0 paired with stiffness=0 enables noclip."),
+        "DFIntDebugSimPrimalStiffnessMax" => Some("Primal solver maximum stiffness companion. Value 0 paired with stiffness=0 enables noclip."),
+        "FFlagNextGenReplicatorEnabledRead3" => Some("NextGen replicator read-side toggle (Aurora invisibility chain companion)."),
+        "DFFlagNextGenReplicatorEnabledWriteServerSynchronized" => Some("NextGen replicator server-sync toggle. Toggled rapidly with Write4 to desync other clients."),
+        "DFIntDataSenderMaxBandwidthBps" => Some("Data sender bandwidth cap. Documented cheat value 150 forces high ping / packet starvation."),
+        "FIntPhysicsGridHierarchyLowestLevelInitBinCount" => Some("Physics grid bin count. Values near INT_MAX (e.g. 199999999) crash other clients via unbounded allocation."),
+        "FIntPhysicsGridHierarchyLowestLevelInitBinCountWorldModel" => Some("Physics grid bin count (world-model variant). Same crash exploit."),
+        "FIntPhysicsSolverCollisionPoolBucketSize" => Some("Physics collision pool bucket size. Value 2147483647 (INT_MAX) crashes clients."),
+        "FIntPhysicsSolverCollisionPoolBucketSizeWorldModel" => Some("Physics collision pool bucket size (world-model variant). Same crash exploit."),
+        "DFIntTimestepArbiterThresholdCFLThou" => Some("Timestep arbiter CFL threshold. Default ~300; value 0 crashes the physics step."),
 
         // === HIGH: Visual Advantage ===
         "DFFlagDebugDrawBroadPhaseAABBs" => Some("Draws outlines around every part/humanoid. Functions as wallhack."),
@@ -537,6 +591,10 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "FFlagDebugDontRenderScreenGui" => Some("Hides all screen GUIs. Can remove game UI for cleaner competitive view."),
         "DFIntRenderClampRoughnessMax" => Some("Roughness clamp. Extreme negative values make avatars extremely shiny/visible."),
         "DFFlagDebugEnableInterpolationVisualizer" => Some("Shows network position debug overlay. Reveals player interpolation data."),
+        "DFFlagAnimatorDrawSkeletonText" => Some("Renders bone-name labels on every player skeleton. Companion to skeleton ESP exploit."),
+        "FFlagDebugEnableOctreeValidation" => Some("Outlines spatial-tree partitions. Wallhack-adjacent (reveals occluded geometry)."),
+        "DFIntCullFactorPixelThresholdMainViewHighQuality" => Some("Main-view culling threshold. Extreme values (10000+ / INT_MAX) skip occlusion (x-ray)."),
+        "DFIntCullFactorPixelThresholdMainViewLowQuality" => Some("Main-view culling threshold (low-quality). Same x-ray effect."),
 
         // === MEDIUM ===
         "DFIntTaskSchedulerTargetFps" => Some("FPS target. Values like 9999 or 2147483647 uncap framerate."),
