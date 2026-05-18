@@ -4506,6 +4506,48 @@ mod windows_impl {
         out
     }
 
+    pub(super) fn render_config_cache_finding_from_matches(
+        mut exact_matches: Vec<String>,
+        config_only_values: Vec<String>,
+    ) -> Option<ScanFinding> {
+        let evidence_count = exact_matches.len();
+        if evidence_count == 0 {
+            return None;
+        }
+
+        let verdict = if evidence_count >= RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES {
+            ScanVerdict::Flagged
+        } else {
+            ScanVerdict::Suspicious
+        };
+        let description = match verdict {
+            ScanVerdict::Flagged => "Critical live Roblox runtime-variable overrides",
+            _ => "Suspicious live Roblox runtime-variable overrides",
+        };
+        exact_matches.sort_unstable();
+        exact_matches.dedup();
+        let mut detail_fields = vec![format!(
+            "Detected flags: {}",
+            render_config_detail_group(&exact_matches)
+        )];
+        if !config_only_values.is_empty() {
+            detail_fields.push(format!(
+                "Config-only values without live address proof: {}",
+                render_config_detail_group(&config_only_values)
+            ));
+        }
+        detail_fields.push(
+            "Detection: read cached live Roblox variable addresses and confirmed exact curated cheat values in live memory; ordinary cached engine values are not treated as injected overrides".to_string(),
+        );
+
+        Some(ScanFinding::new(
+            "memory_scanner",
+            verdict,
+            description,
+            Some(detail_fields.join(" | ")),
+        ))
+    }
+
     struct PeSectionMap {
         virtual_address: usize,
         virtual_size: usize,
@@ -4622,9 +4664,7 @@ mod windows_impl {
         let image_defaults = PeImageDefaults::load(exe_path);
         let main_module = main_module_info_windows(handle);
         let mut exact_matches = Vec::new();
-        let mut changed_cached_values = Vec::new();
         let mut seen = HashSet::new();
-        let mut exact_cache_keys = HashSet::new();
         for &rule in RUNTIME_OVERRIDE_RULES {
             let cache_key = render_config_cache_key(rule.name);
             let Some(addr) = obj
@@ -4649,75 +4689,17 @@ mod windows_impl {
                 {
                     continue;
                 }
-                exact_cache_keys.insert(cache_key.to_string());
                 exact_matches.push(format!("{}={}", rule.name, runtime_value_label(rule.value),));
             }
         }
 
-        for (cache_key, value) in obj {
-            if exact_cache_keys.contains(cache_key) {
-                continue;
-            }
-            let Some(addr) = value.as_u64().and_then(|value| usize::try_from(value).ok()) else {
-                continue;
-            };
-            let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
-                continue;
-            };
-            let live_value = i32::from_le_bytes(raw_value);
-            let Some(default_value) =
-                module_file_default_for_addr(addr, main_module, image_defaults.as_ref())
-            else {
-                continue;
-            };
-            if live_value == default_value {
-                continue;
-            }
-            let display_name = config_values
-                .get(cache_key)
-                .map(|(flag_name, _)| flag_name.as_str())
-                .unwrap_or(cache_key.as_str());
-            changed_cached_values.push(format!("{}={}", display_name, live_value));
-        }
-
-        let evidence_count = exact_matches.len() + changed_cached_values.len();
-        if evidence_count == 0 {
-            return None;
-        }
-
-        let verdict = if evidence_count >= RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES {
-            ScanVerdict::Flagged
-        } else {
-            ScanVerdict::Suspicious
-        };
-        let description = match verdict {
-            ScanVerdict::Flagged => "Critical live Roblox runtime-variable overrides",
-            _ => "Suspicious live Roblox runtime-variable overrides",
-        };
-        let mut live_flags = exact_matches;
-        live_flags.extend(changed_cached_values);
-        live_flags.sort_unstable();
-        live_flags.dedup();
-        let mut detail_fields = vec![format!(
-            "Detected flags: {}",
-            render_config_detail_group(&live_flags)
-        )];
-        if !config_only_values.is_empty() {
-            detail_fields.push(format!(
-                "Config-only values without live address proof: {}",
-                render_config_detail_group(&config_only_values)
-            ));
-        }
-        detail_fields.push(
-            "Detection: read cached live Roblox variable addresses; exact curated values are confirmed only when they are not the executable default, and uncurated cached values are reported only when live memory differs from the Roblox executable default".to_string(),
-        );
-
-        Some(ScanFinding::new(
-            "memory_scanner",
-            verdict,
-            description,
-            Some(detail_fields.join(" | ")),
-        ))
+        // Do not promote arbitrary cached-address values just because they
+        // differ from bytes in the Roblox executable image. DynamicVariables
+        // are legitimately rewritten by Roblox's own runtime/config refresh,
+        // and the RenderConfig cache often contains ordinary engine values
+        // such as UGC validation limits. Cache-address evidence is high
+        // confidence only when the live value matches a curated cheat value.
+        render_config_cache_finding_from_matches(exact_matches, config_only_values)
     }
 
     fn inspect_render_config_runtime_overrides(
@@ -6060,6 +6042,44 @@ mod tests {
 
         assert_eq!(coverage.gap_bytes(), 1_153_433_600);
         assert!(coverage.material_gap());
+    }
+
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+    #[test]
+    fn render_config_cache_without_exact_curated_matches_stays_clean() {
+        let finding = windows_impl::render_config_cache_finding_from_matches(
+            Vec::new(),
+            vec![
+                "Network=775".to_string(),
+                "UGCValidateFullBodyXMaxClassic=880".to_string(),
+            ],
+        );
+
+        assert!(
+            finding.is_none(),
+            "ordinary cached engine values must not become runtime override evidence"
+        );
+    }
+
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
+    #[test]
+    fn render_config_cache_with_three_exact_curated_matches_is_flagged() {
+        let finding = windows_impl::render_config_cache_finding_from_matches(
+            vec![
+                "DFIntRakNetLoopMs=1".to_string(),
+                "DFIntRakNetPingFrequencyMillisecond=1".to_string(),
+                "DFIntRakNetNakResendDelayMs=1".to_string(),
+            ],
+            Vec::new(),
+        )
+        .expect("exact curated matches should produce a finding");
+
+        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
+        assert!(finding
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ordinary cached engine values are not treated as injected overrides"));
     }
 
     #[test]
