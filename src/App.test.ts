@@ -7,7 +7,9 @@ import {
   groupByVerdict,
   hasTauriRuntime,
   importBadgeTitle,
+  parseFFlagOverride,
   parseFindingDetails,
+  partitionFFlagOverrides,
   relativeTime,
   shortTime,
   truncate,
@@ -164,5 +166,221 @@ describe("App UI helpers", () => {
 
   it("renders short times without throwing for valid ISO timestamps", () => {
     expect(shortTime("2026-05-06T12:34:56.000Z")).toMatch(/\d{2}:\d{2}/);
+  });
+});
+
+describe("FFlag override grouping", () => {
+  it("parses a live registry override finding with default-from-details", () => {
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details:
+        "PID: 1234 | Singleton: 0xABC via heap | Registry entry: 0xDEF | Value address: 0x111 | Default: 15 | Detection: resolved Roblox FastFlag hash table",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    expect(parseFFlagOverride(f)).toEqual({
+      flagName: "DFIntS2PhysicsSenderRate",
+      injectedValue: "-30",
+      defaultValue: "15",
+      verdict: "Flagged",
+      kind: "live-registry",
+      sourceKey: findingKey(f),
+    });
+  });
+
+  it("parses a baseline-deviation finding with inline (default: X)", () => {
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Live FastFlag deviates from baseline: "DFIntRaycastMaxDistance" = 3 (default: 15000)',
+      details:
+        "PID: 1234 | Registry node: 0x1 | Flag string: 0x2 | Registry entry: 0x3 | Value address: 0x4 | Node candidates: bucket=2 | Default: 15000 | Note: very low values break hit detection",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.flagName).toBe("DFIntRaycastMaxDistance");
+    expect(parsed.injectedValue).toBe("3");
+    expect(parsed.defaultValue).toBe("15000");
+    expect(parsed.kind).toBe("baseline-deviation");
+  });
+
+  it("parses a heap-context injection-evidence finding for a bool override", () => {
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag injection evidence: "DFFlagAnimatorDrawSkeletonAll" = true',
+      details:
+        "Address: 0x100 | Encoding: ascii | Occurrences: 4 | Category: HIGH | Default: false | Renders skeleton ESP",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.flagName).toBe("DFFlagAnimatorDrawSkeletonAll");
+    expect(parsed.injectedValue).toBe("true");
+    expect(parsed.defaultValue).toBe("false");
+    expect(parsed.kind).toBe("injection-context");
+  });
+
+  it("parses a value-match finding without a known default", () => {
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag value match: "DFIntCullFactorPixelThresholdMainViewHighQuality" = 2147483647',
+      details:
+        "Address: 0x200 | Encoding: ascii | Occurrences: 1 | Category: HIGH | Detection: parsed value matches a curated injector cheat-value rule",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.flagName).toBe(
+      "DFIntCullFactorPixelThresholdMainViewHighQuality",
+    );
+    expect(parsed.injectedValue).toBe("2147483647");
+    expect(parsed.defaultValue).toBeNull();
+    expect(parsed.kind).toBe("value-match");
+  });
+
+  it("ignores non-memory_scanner findings", () => {
+    const f: ScanFinding = {
+      module: "file_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details: null,
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    expect(parseFFlagOverride(f)).toBeNull();
+  });
+
+  it("ignores Clean findings (those are the aggregate summary lines)", () => {
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Clean",
+      description:
+        '12 non-allowlisted FFlag-shaped identifiers observed in Roblox heap.',
+      details: "Unique names: 12 | Total occurrences: 480",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    expect(parseFFlagOverride(f)).toBeNull();
+  });
+
+  it("ignores memory_scanner findings whose description does not match the prefix table", () => {
+    // Module load / coverage findings must NEVER get absorbed into the
+    // override card — they are unrelated runtime evidence and the user
+    // needs to see them as their own row.
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description: 'Untrusted module loaded into Roblox: "evil.dll"',
+      details: "Path: C:\\Temp\\evil.dll, PID: 1234",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    expect(parseFFlagOverride(f)).toBeNull();
+  });
+
+  it("partitions multiple overrides, dedupes by (name, injected_value), keeps the strongest verdict", () => {
+    // Two findings emit for the same (flag, injected value) — one from the
+    // live registry (Flagged, no Default in details) and one from the value-
+    // match path (Suspicious, no default). The aggregated entry must keep
+    // the Flagged verdict and the live-registry kind, since that's the
+    // stronger evidence.
+    const liveFlag: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details: "PID: 1 | Singleton: 0x0 via heap | Registry entry: 0x0 | Value address: 0x0 | Default: 15 | Detection: live",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const valueMatch: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag value match: "DFIntS2PhysicsSenderRate" = -30',
+      details: "Address: 0x100 | Encoding: ascii | Occurrences: 2 | Category: CRITICAL",
+      timestamp: "2026-05-06T12:34:57.000Z",
+    };
+    const unrelated: ScanFinding = {
+      module: "process_scanner",
+      verdict: "Suspicious",
+      description: "Known cheat tool process running",
+      details: "name=odessa.exe",
+      timestamp: "2026-05-06T12:34:58.000Z",
+    };
+
+    const { overrides, sourceKeys, rest } = partitionFFlagOverrides([
+      liveFlag,
+      valueMatch,
+      unrelated,
+    ]);
+    expect(overrides.length).toBe(1);
+    expect(overrides[0]).toMatchObject({
+      flagName: "DFIntS2PhysicsSenderRate",
+      injectedValue: "-30",
+      defaultValue: "15",
+      verdict: "Flagged",
+      kind: "live-registry",
+    });
+    expect(sourceKeys.size).toBe(2);
+    expect(rest).toEqual([unrelated]);
+  });
+
+  it("keeps distinct entries for the same flag at different injected values", () => {
+    const f1: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details: "Default: 15",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const f2: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag value match: "DFIntS2PhysicsSenderRate" = 3',
+      details: "Address: 0x100",
+      timestamp: "2026-05-06T12:34:57.000Z",
+    };
+    const { overrides } = partitionFFlagOverrides([f1, f2]);
+    expect(overrides.length).toBe(2);
+    // Sorted by (verdict desc, name asc) — Flagged comes first.
+    expect(overrides[0].injectedValue).toBe("-30");
+    expect(overrides[1].injectedValue).toBe("3");
+  });
+
+  it("returns empty overrides and untouched rest when no FFlag overrides present", () => {
+    const f: ScanFinding = {
+      module: "file_scanner",
+      verdict: "Flagged",
+      description: "Cheat tool installed",
+      details: "Path: C:\\Tools\\cheats\\fflag_injector.exe",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const { overrides, sourceKeys, rest } = partitionFFlagOverrides([f]);
+    expect(overrides).toEqual([]);
+    expect(sourceKeys.size).toBe(0);
+    expect(rest).toEqual([f]);
+  });
+
+  it("handles description-only baseline deviation without a Default details field", () => {
+    // The runtime_flag_baseline_finding emission path uses inline `(default: X)`
+    // in the description AND now also adds Default: to details. This test
+    // covers a scenario where details parsing might fail but the inline form
+    // still works.
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Live FastFlag deviates from baseline: "FIntCameraFarZPlane" = 1 (default: 100000)',
+      details: null,
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.injectedValue).toBe("1");
+    expect(parsed.defaultValue).toBe("100000");
   });
 });

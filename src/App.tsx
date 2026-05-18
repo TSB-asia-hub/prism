@@ -1007,34 +1007,74 @@ function Workarea({
       )}
 
       {(phase === "complete" || phase === "scanning") &&
-        groupBySurfaceAndVerdict(findings).map((surfaceGroup) => (
-          <div className="findings-surface" key={surfaceGroup.surface}>
-            <SurfaceHeader
-              surface={surfaceGroup.surface}
-              count={surfaceGroup.items.reduce(
-                (sum, group) => sum + group.items.length,
-                0,
+        (() => {
+          // Pull per-flag runtime-override findings out of the main list and
+          // render them as a single collapsible aggregate card at the top of
+          // the runtime surface. This replaces the messy stack of one-row-per-
+          // injected-flag findings the user flagged in the screenshot.
+          //
+          // Note: we only partition once for the whole list. The grouping
+          // call after still works on `rest` (the absorbed findings are
+          // missing), so the verdict-row counts shown by SectionHeader will
+          // correctly drop the absorbed entries.
+          const { overrides, rest } = partitionFFlagOverrides(findings);
+          const overrideCardOpen = openKey === FFLAG_OVERRIDES_CARD_KEY;
+          const surfaceGroups = groupBySurfaceAndVerdict(rest);
+          // Make sure the runtime surface section appears even when *every*
+          // runtime-surface finding got absorbed into the override card.
+          // Otherwise the card would render above nothing on its own (which is
+          // fine — but the "In use now" header gives it context).
+          const hasRuntimeGroup = surfaceGroups.some(
+            (g) => g.surface === "runtime",
+          );
+          if (overrides.length > 0 && !hasRuntimeGroup) {
+            surfaceGroups.unshift({ surface: "runtime", items: [] });
+          }
+          return surfaceGroups.map((surfaceGroup) => (
+            <div className="findings-surface" key={surfaceGroup.surface}>
+              <SurfaceHeader
+                surface={surfaceGroup.surface}
+                count={
+                  surfaceGroup.items.reduce(
+                    (sum, group) => sum + group.items.length,
+                    0,
+                  ) +
+                  (surfaceGroup.surface === "runtime" ? overrides.length : 0)
+                }
+              />
+              {surfaceGroup.surface === "runtime" && overrides.length > 0 && (
+                <FFlagOverrideCard
+                  overrides={overrides}
+                  open={overrideCardOpen}
+                  onToggle={onToggle}
+                />
               )}
-            />
-            {surfaceGroup.items.map((group) => (
-              <div className="findings-group" key={`${surfaceGroup.surface}-${group.verdict}`}>
-                <SectionHeader verdict={group.verdict} count={group.items.length} />
-                {group.items.map((f) => {
-                  const key = findingKey(f);
-                  return (
-                    <FindingRow
-                      key={key}
-                      rowKey={key}
-                      finding={f}
-                      open={openKey === key}
-                      onToggle={onToggle}
-                    />
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        ))}
+              {surfaceGroup.items.map((group) => (
+                <div
+                  className="findings-group"
+                  key={`${surfaceGroup.surface}-${group.verdict}`}
+                >
+                  <SectionHeader
+                    verdict={group.verdict}
+                    count={group.items.length}
+                  />
+                  {group.items.map((f) => {
+                    const key = findingKey(f);
+                    return (
+                      <FindingRow
+                        key={key}
+                        rowKey={key}
+                        finding={f}
+                        open={openKey === key}
+                        onToggle={onToggle}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          ));
+        })()}
     </div>
   );
 }
@@ -1137,6 +1177,178 @@ function SectionHeader({
 // findings for large Roblox processes, finding counts can spike into the
 // hundreds — without this memo the main thread stalls long enough that
 // buttons stop responding.
+// Stable key for the FFlag overrides aggregate card. There is at most one
+// per scan, so a constant key is fine for the open/close registry. The
+// "fflag-overrides-card::" prefix makes the key distinguishable from real
+// finding keys in dev tooling.
+export const FFLAG_OVERRIDES_CARD_KEY = "fflag-overrides-card::aggregate";
+
+function fflagOverrideKindLabel(kind: FFlagOverrideKind): string {
+  switch (kind) {
+    case "live-registry":
+      return "live registry";
+    case "baseline-deviation":
+      return "baseline deviation";
+    case "injection-context":
+      return "injector context";
+    case "value-match":
+      return "value match";
+  }
+}
+
+function fflagOverrideKindHelp(kind: FFlagOverrideKind): string {
+  switch (kind) {
+    case "live-registry":
+      return "Scanner walked Roblox's live FastFlag hash table and read this value directly from process memory.";
+    case "baseline-deviation":
+      return "Scanner compared the live value to a known-clean Roblox baseline and saw a deviation.";
+    case "injection-context":
+      return "Flag value was found in the Roblox heap within proximity of injector/offset-tool provenance strings.";
+    case "value-match":
+      return "Parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious).";
+  }
+}
+
+function FFlagOverrideCard({
+  overrides,
+  open,
+  onToggle,
+}: {
+  overrides: FFlagOverride[];
+  open: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const counts = overrides.reduce(
+    (acc, o) => {
+      acc[o.verdict] = (acc[o.verdict] || 0) + 1;
+      return acc;
+    },
+    {} as Record<ScanVerdict, number>,
+  );
+  // Card severity = highest individual override severity. Drives the
+  // accent bar / glyph so the card visually matches the worst finding it
+  // absorbs (mirrors how the per-row UI signals severity today).
+  const cardVerdict: ScanVerdict =
+    counts.Flagged > 0
+      ? "Flagged"
+      : counts.Suspicious > 0
+        ? "Suspicious"
+        : counts.Inconclusive > 0
+          ? "Inconclusive"
+          : "Clean";
+  const glyph =
+    cardVerdict === "Flagged"
+      ? "✕"
+      : cardVerdict === "Suspicious"
+        ? "▲"
+        : cardVerdict === "Inconclusive"
+          ? "?"
+          : "•";
+  const handleClick = useCallback(
+    () => onToggle(FFLAG_OVERRIDES_CARD_KEY),
+    [onToggle],
+  );
+  const handleKey = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onToggle(FFLAG_OVERRIDES_CARD_KEY);
+      }
+    },
+    [onToggle],
+  );
+  return (
+    <div
+      className={`fflag-card fflag-card--${cardVerdict.toLowerCase()} ${
+        open ? "fflag-card--open" : ""
+      }`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      aria-label={`${overrides.length} injected FFlag override${
+        overrides.length === 1 ? "" : "s"
+      } detected. Press Enter to ${open ? "collapse" : "expand"}.`}
+      onClick={handleClick}
+      onKeyDown={handleKey}
+    >
+      <span className="fflag-card__bar" aria-hidden="true" />
+      <div className="fflag-card__header">
+        <span className="fflag-card__glyph" aria-hidden="true">
+          {glyph}
+        </span>
+        <div className="fflag-card__title-block">
+          <span className="fflag-card__title">
+            {overrides.length} injected FFlag override
+            {overrides.length === 1 ? "" : "s"} detected
+          </span>
+          <span className="fflag-card__subtitle">
+            {counts.Flagged ? `${counts.Flagged} critical · ` : ""}
+            {counts.Suspicious ? `${counts.Suspicious} suspicious · ` : ""}
+            tap to view each flag's injected value
+          </span>
+        </div>
+        <span className="fflag-card__caret" aria-hidden="true">
+          ›
+        </span>
+      </div>
+      {open && (
+        <div className="fflag-card__body">
+          <ul className="fflag-list">
+            {overrides.map((o) => (
+              <FFlagOverrideRow key={o.sourceKey} override={o} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FFlagOverrideRow({ override }: { override: FFlagOverride }) {
+  const verdictGlyph =
+    override.verdict === "Flagged"
+      ? "✕"
+      : override.verdict === "Suspicious"
+        ? "▲"
+        : "?";
+  return (
+    <li className={`fflag-entry fflag-entry--${override.verdict.toLowerCase()}`}>
+      <span
+        className="fflag-entry__verdict"
+        title={`${override.verdict} severity`}
+        aria-label={`${override.verdict} severity`}
+      >
+        {verdictGlyph}
+      </span>
+      <span className="fflag-entry__name" title={override.flagName}>
+        {override.flagName}
+      </span>
+      <span className="fflag-entry__values">
+        <span
+          className="fflag-entry__injected"
+          title={`Injected value: ${override.injectedValue}`}
+        >
+          {override.injectedValue}
+        </span>
+        {override.defaultValue !== null && (
+          <span
+            className="fflag-entry__default"
+            title={`Vanilla default: ${override.defaultValue}`}
+          >
+            <s>{override.defaultValue}</s>
+          </span>
+        )}
+      </span>
+      <span
+        className="fflag-entry__kind"
+        title={fflagOverrideKindHelp(override.kind)}
+      >
+        {fflagOverrideKindLabel(override.kind)}
+      </span>
+    </li>
+  );
+}
+
 type FindingRowProps = {
   rowKey: string;
   finding: ScanFinding;
@@ -1257,6 +1469,209 @@ const FindingRow = memo(function FindingRow({
 });
 
 /* ——————————————————————————————————————————————————————————— */
+
+// ============================================================
+// FFlag override grouping
+// ============================================================
+//
+// memory_scanner emits one finding per detected runtime FFlag injection
+// (multiple code paths: live registry, anchor-based, heap-context, value-match,
+// baseline-deviation). Rendering each as its own list row produces the messy
+// stack the screenshot in the feature request shows. Instead, parse those
+// findings out and render them as ONE collapsible card whose contents are a
+// neat list: "FlagName  injected_value  ~~original_default~~".
+//
+// Detection is by exact prefix match against the description templates the
+// backend emits (see memory_scanner::findings_from_table /
+// inspect_runtime_fflag_registry / inspect_runtime_node_entries /
+// runtime_flag_baseline_finding / runtime_node_baseline_finding). Substring
+// matching would be too broad — many unrelated memory_scanner findings also
+// contain the word "FFlag".
+//
+// Any change to the backend description format MUST be mirrored here. The
+// `parseFFlagOverride` regression test in App.test.ts pins the exact set of
+// templates this parser recognizes.
+export type FFlagOverrideKind =
+  | "live-registry"
+  | "baseline-deviation"
+  | "injection-context"
+  | "value-match";
+
+export type FFlagOverride = {
+  flagName: string;
+  injectedValue: string;
+  defaultValue: string | null;
+  verdict: ScanVerdict;
+  kind: FFlagOverrideKind;
+  // The originating finding's stable key so a click-through (e.g. "view raw
+  // forensic detail") can locate the underlying row again.
+  sourceKey: string;
+};
+
+// Prefix → kind classification. The exact strings come from the backend
+// `label` switch arms in memory_scanner.rs; the four-tier `Critical | Suspicious
+// | Live | <bare>` shape lets us identify the finding without re-parsing the
+// verdict.
+const FFLAG_OVERRIDE_PREFIXES: Array<{ prefix: string; kind: FFlagOverrideKind }> = [
+  { prefix: "Live FastFlag deviates from baseline: ", kind: "baseline-deviation" },
+  { prefix: "Critical live FastFlag registry override: ", kind: "live-registry" },
+  { prefix: "Suspicious live FastFlag registry override: ", kind: "live-registry" },
+  { prefix: "Live FastFlag registry override: ", kind: "live-registry" },
+  { prefix: "Critical runtime FFlag injection evidence: ", kind: "injection-context" },
+  { prefix: "Suspicious runtime FFlag injection evidence: ", kind: "injection-context" },
+  { prefix: "Runtime FFlag evidence: ", kind: "injection-context" },
+  { prefix: "Suspicious runtime FFlag value match: ", kind: "value-match" },
+];
+
+// Parse the description body `"FlagName" = value` (possibly followed by
+// ` (default: X)` for the baseline-deviation path). Returns null if the
+// shape doesn't match — caller treats null as "not an FFlag override
+// finding" and renders the original row instead.
+function parseFFlagOverrideBody(body: string): {
+  flagName: string;
+  injectedValue: string;
+  inlineDefault: string | null;
+} | null {
+  // Description body must start with `"<name>" = ` (closing-quote-then-space-equals
+  // is the strictest anchor — any backend drift in formatting will fail to parse
+  // and gracefully fall back to the row renderer).
+  if (!body.startsWith('"')) return null;
+  const closeQuote = body.indexOf('" = ', 1);
+  if (closeQuote < 0) return null;
+  const flagName = body.slice(1, closeQuote);
+  if (!flagName || flagName.length > 128) return null;
+  const after = body.slice(closeQuote + 4); // skip past `" = `
+
+  // Optional ` (default: X)` trailing block in the baseline-deviation case.
+  // We don't use a regex with backreferences because `X` can contain
+  // arbitrary characters including `)` for some int values like `-1)`.
+  const defaultMarker = " (default: ";
+  const defaultStart = after.lastIndexOf(defaultMarker);
+  if (defaultStart < 0) {
+    return { flagName, injectedValue: after.trim(), inlineDefault: null };
+  }
+  const injectedValue = after.slice(0, defaultStart).trim();
+  const closingParen = after.lastIndexOf(")");
+  if (closingParen < defaultStart + defaultMarker.length) {
+    return { flagName, injectedValue: after.trim(), inlineDefault: null };
+  }
+  const inlineDefault = after
+    .slice(defaultStart + defaultMarker.length, closingParen)
+    .trim();
+  return { flagName, injectedValue, inlineDefault };
+}
+
+export function parseFFlagOverride(finding: ScanFinding): FFlagOverride | null {
+  if (finding.module !== "memory_scanner") return null;
+
+  // We accept Flagged / Suspicious / Inconclusive (the registry/anchor
+  // paths sometimes emit Inconclusive when a layout probe partly succeeded
+  // but the read failed). Clean findings are summaries, never per-flag rows.
+  if (finding.verdict === "Clean") return null;
+
+  const match = FFLAG_OVERRIDE_PREFIXES.find((entry) =>
+    finding.description.startsWith(entry.prefix),
+  );
+  if (!match) return null;
+  const body = finding.description.slice(match.prefix.length);
+  const parsed = parseFFlagOverrideBody(body);
+  if (!parsed) return null;
+
+  // Default value sources, by priority:
+  //   1) inline `(default: X)` in the description (baseline-deviation only)
+  //   2) `Default: X` field in details (added by every emission path that knows
+  //      the canonical default via runtime_known_default_label)
+  // We pick the first non-empty one; if neither yields a value the UI just
+  // hides the strikethrough column.
+  let defaultValue: string | null = parsed.inlineDefault;
+  if (!defaultValue && finding.details) {
+    const parsedDetails = parseFindingDetails(finding.details);
+    const field = parsedDetails.fields.find((f) => f.label === "Default");
+    if (field?.value) {
+      defaultValue = field.value;
+    }
+  }
+  return {
+    flagName: parsed.flagName,
+    injectedValue: parsed.injectedValue,
+    defaultValue,
+    verdict: finding.verdict,
+    kind: match.kind,
+    sourceKey: findingKey(finding),
+  };
+}
+
+// Verdict ranking for dedupe — higher means stronger evidence.
+const VERDICT_PRIORITY: Record<ScanVerdict, number> = {
+  Flagged: 4,
+  Suspicious: 3,
+  Inconclusive: 2,
+  Clean: 1,
+};
+
+// Split a finding list into:
+//   - overrides: FFlagOverride[] (deduped by name+injected_value, strongest
+//     verdict + most-informative default kept)
+//   - sourceKeys: Set of finding keys that were absorbed into the overrides
+//     card (caller filters these out of the main row list to avoid
+//     double-rendering)
+//   - rest: ScanFinding[] in original order, minus absorbed entries
+export function partitionFFlagOverrides(findings: ScanFinding[]): {
+  overrides: FFlagOverride[];
+  sourceKeys: Set<string>;
+  rest: ScanFinding[];
+} {
+  const byKey = new Map<string, FFlagOverride>();
+  const absorbedSourceKeys = new Set<string>();
+  const rest: ScanFinding[] = [];
+
+  for (const f of findings) {
+    const parsed = parseFFlagOverride(f);
+    if (!parsed) {
+      rest.push(f);
+      continue;
+    }
+    absorbedSourceKeys.add(parsed.sourceKey);
+    const dedupeKey = `${parsed.flagName}::${parsed.injectedValue}`;
+    const existing = byKey.get(dedupeKey);
+    if (!existing) {
+      byKey.set(dedupeKey, parsed);
+      continue;
+    }
+    // Merge: keep the stronger verdict; prefer the entry that has a
+    // defaultValue if the existing one didn't.
+    const winner: FFlagOverride = { ...existing };
+    if (
+      VERDICT_PRIORITY[parsed.verdict] > VERDICT_PRIORITY[existing.verdict]
+    ) {
+      winner.verdict = parsed.verdict;
+    }
+    if (!winner.defaultValue && parsed.defaultValue) {
+      winner.defaultValue = parsed.defaultValue;
+    }
+    // For kind, prefer the most "live" evidence: live-registry >
+    // baseline-deviation > injection-context > value-match.
+    const KIND_PRIORITY: Record<FFlagOverrideKind, number> = {
+      "live-registry": 4,
+      "baseline-deviation": 3,
+      "injection-context": 2,
+      "value-match": 1,
+    };
+    if (KIND_PRIORITY[parsed.kind] > KIND_PRIORITY[existing.kind]) {
+      winner.kind = parsed.kind;
+    }
+    byKey.set(dedupeKey, winner);
+  }
+
+  // Stable sort by (verdict desc, flag name asc) so the most severe entries
+  // float to the top of the expanded list.
+  const overrides = Array.from(byKey.values()).sort((a, b) => {
+    const v = VERDICT_PRIORITY[b.verdict] - VERDICT_PRIORITY[a.verdict];
+    return v !== 0 ? v : a.flagName.localeCompare(b.flagName);
+  });
+
+  return { overrides, sourceKeys: absorbedSourceKeys, rest };
+}
 
 // Parse a finding's `details` string into a list of {label, value} pairs so
 // the UI can render them as a clean two-column grid instead of a single

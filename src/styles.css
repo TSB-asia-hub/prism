@@ -1080,6 +1080,199 @@ button {
 }
 
 /* ——————————————————————————————————————————————————————————————
+   Injected-FFlag aggregate card
+   ——————————————————————————————————————————————————————————————
+   The memory_scanner emits one finding per detected runtime FFlag
+   override. Rather than render those as a wall of cramped table rows
+   (the messy stack in the v0.8.2 screenshot), they get partitioned out
+   in App.tsx and shown as ONE collapsible card. Expanded, the card lists
+   each flag with its injected value and (when known) the canonical
+   default with a strikethrough. */
+
+.fflag-card {
+  position: relative;
+  margin: 16px 18px 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-sunk);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+  overflow: hidden;
+}
+.fflag-card:hover { background: var(--surface); }
+.fflag-card:focus-visible {
+  outline: 2px solid var(--text-faint);
+  outline-offset: 2px;
+}
+.fflag-card--flagged { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.fflag-card--suspicious { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.fflag-card--inconclusive { border-color: color-mix(in srgb, var(--text-muted) 35%, var(--line)); }
+
+.fflag-card__bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--text-muted);
+}
+.fflag-card--flagged .fflag-card__bar { background: var(--danger); }
+.fflag-card--suspicious .fflag-card__bar { background: var(--warn); }
+.fflag-card--inconclusive .fflag-card__bar { background: var(--text-muted); }
+.fflag-card--clean .fflag-card__bar { background: var(--clean); }
+
+.fflag-card__header {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px 14px 20px;
+}
+
+.fflag-card__glyph {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.fflag-card--flagged .fflag-card__glyph { color: var(--danger); }
+.fflag-card--suspicious .fflag-card__glyph { color: var(--warn); }
+.fflag-card--inconclusive .fflag-card__glyph { color: var(--text-muted); }
+
+.fflag-card__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fflag-card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.005em;
+}
+
+.fflag-card__subtitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.fflag-card__caret {
+  font-size: 16px;
+  color: var(--text-faint);
+  transition: transform 0.15s var(--ease);
+  font-family: var(--font-mono);
+  width: 16px;
+  text-align: center;
+}
+.fflag-card--open .fflag-card__caret {
+  transform: rotate(90deg);
+}
+
+.fflag-card__body {
+  padding: 4px 16px 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.fflag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fflag-entry {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 2fr) minmax(0, 1.4fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 8px 6px;
+  border-radius: 6px;
+  transition: background 0.1s var(--ease);
+  cursor: default;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.fflag-entry:hover { background: var(--surface); }
+
+.fflag-entry__verdict {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.fflag-entry--flagged .fflag-entry__verdict { color: var(--danger); }
+.fflag-entry--suspicious .fflag-entry__verdict { color: var(--warn); }
+.fflag-entry--inconclusive .fflag-entry__verdict { color: var(--text-muted); }
+
+.fflag-entry__name {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.fflag-entry__values {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fflag-entry__injected {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.fflag-entry--flagged .fflag-entry__injected {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.fflag-entry--inconclusive .fflag-entry__injected {
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+
+.fflag-entry__default {
+  color: var(--text-faint);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fflag-entry__default s {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.4px;
+  text-decoration-color: color-mix(in srgb, var(--text-faint) 80%, transparent);
+}
+
+.fflag-entry__kind {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* ——————————————————————————————————————————————————————————————
    Responsive
    —————————————————————————————————————————————————————————————— */
 
@@ -1103,4 +1296,12 @@ button {
     grid-template-columns: minmax(0, 1fr) auto;
   }
   .surface-header__help { grid-column: 1 / -1; white-space: normal; }
+  /* Drop the evidence-kind pill column on narrow viewports; the title hover
+     still surfaces the kind. Inject/default stay side-by-side because that
+     is the load-bearing visual the card is built around. */
+  .fflag-entry {
+    grid-template-columns: 18px minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+  .fflag-entry__kind { display: none; }
+  .fflag-card { margin: 12px 14px 0; }
 }
