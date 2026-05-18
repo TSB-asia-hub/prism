@@ -233,18 +233,20 @@ const INJECTOR_TOOL_MARKERS: &[&str] = &[
     //   - https://hybrid-analysis.com sample d0d98d43… (nikitaxyxz)
     "fastflag_injector",
     "fastflag_injector_gui_enhanced",
-    "fflagtoolkit",
-    "fflag toolkit",
+    // ("fflagtoolkit" already declared above at the original ecosystem block.)
     "fflag_toolkit",
     "velostrap",
     "masterstrap",
-    "flag browser",
     "proxy-fastflags",
     // rbxoffsets.xyz — community offset service most external runtime
     // injectors outsource per-build offsets from (per fantaize.net 2026
     // desync writeup). The literal hostname never appears in vanilla Roblox.
+    // NOTE: the bare "rbxoffsets" form was deliberately excluded after
+    // mega-review showed it collides with JSON-key shapes ("rbxoffsets":{...})
+    // that Roblox might plausibly ship internally; the hostname form is the
+    // discriminating signal. NOTE: the spaced "flag browser" form was also
+    // deliberately excluded — too generic to be a useful heap-scan needle.
     "rbxoffsets.xyz",
-    "rbxoffsets",
 ];
 
 #[derive(Clone, Copy)]
@@ -455,6 +457,16 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
     RuntimeOverrideRule {
         name: "DFIntMaxClientSimulationRadius",
+        value: RuntimeFlagValue::Int(2_147_000_000),
+        string_scan_promote: true,
+    },
+    // Completes the sim-radius triple. The preset (luafv, alexbomb6666,
+    // Dantezz025) sets all three companions to the same near-INT_MAX value
+    // to grab network ownership of every part in the experience. Adding
+    // this rule closes a live-registry detection gap noted in mega-review:
+    // the Buffer-only variant would otherwise slip through.
+    RuntimeOverrideRule {
+        name: "DFIntMinimalSimRadiusBuffer",
         value: RuntimeFlagValue::Int(2_147_000_000),
         string_scan_promote: true,
     },
@@ -788,40 +800,60 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     //     as a default (heavy negative, near INT_MAX, or absurdly small).
     // ============================================================
 
-    // --- DFIntS2PhysicsSenderRate small absurd extras ---
-    // value 3 documented as Dantezz025 desync preset (chained with TaskScheduler bomb)
+    // --- DFIntS2PhysicsSenderRate=3 (Dantezz025 desync preset) ---
+    // Registry-path only. Per the curation discipline at the top of this
+    // table, small positive integers (`0`, `1`, `-1`, `3`) are in the
+    // plausibly-vanilla class and must not promote from the string-scan
+    // path even when documented as a cheat preset. The companion `=1`
+    // rule above is also registry-only for the same reason; promoting
+    // `=3` here would have allowed a Roblox-shipped A/B remote-config
+    // value to surface as Suspicious on a clean client.
     RuntimeOverrideRule {
         name: "DFIntS2PhysicsSenderRate",
         value: RuntimeFlagValue::Int(3),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntDataSenderMaxBandwidthBps (luafv "Increase Ping" preset) ---
-    // Absurdly low for a real connection; only seen in cheat configs.
+    // Registry-path only. The sibling rule DFIntPhysicsSenderMaxBandwidthBps=1
+    // (above) is also registry-only; three-digit positive integers in a
+    // bandwidth knob are not "so out-of-band no shipping Roblox client
+    // could use them" — Roblox throttles bandwidth aggressively on mobile,
+    // low-spec, and during connection issues. The live registry walk reads
+    // the authoritative value from the FastFlag hash table directly, so
+    // detection coverage is preserved when the registry can be resolved.
     RuntimeOverrideRule {
         name: "DFIntDataSenderMaxBandwidthBps",
         value: RuntimeFlagValue::Int(150),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDataSenderMaxBandwidthBps",
         value: RuntimeFlagValue::Int(555),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntWorldStepMax (devforum 3911546, 4011364 — WorldStepMax desync) ---
-    // Negative values disable other-client physics replication entirely.
+    // Registry-path only. `-1` is the canonical C++ "unlimited / disabled"
+    // sentinel; for a *Max knob, vanilla Roblox could legitimately ship
+    // `-1` to mean "no cap". Every other `-1` rule in this table is
+    // string_scan_promote: false for the same reason.
     RuntimeOverrideRule {
         name: "DFIntWorldStepMax",
         value: RuntimeFlagValue::Int(-1),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
-    // --- DFIntMaxMissedWorldStepsRemembered extra extreme: slow-motion ---
+    // --- DFIntMaxMissedWorldStepsRemembered=1 (slow-motion / warp preset) ---
+    // Registry-path only. `1` is in the canonical plausibly-vanilla
+    // small-positive class per the curation discipline. The existing rule
+    // at value 1000 (above) is also registry-only; the baseline default
+    // is 16 (declared in RUNTIME_FLAG_BASELINES) so the registry walk's
+    // baseline-deviation path still catches any deviation.
     RuntimeOverrideRule {
         name: "DFIntMaxMissedWorldStepsRemembered",
         value: RuntimeFlagValue::Int(1),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntSimBroadPhasePairCountMax — noclip 2 (luafv) ---
@@ -841,10 +873,13 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
 
     // --- DFIntDebugSimPrimalLineSearch — freeze/fly/void presets (luafv) ---
-    // Vanilla default appears to be 100 per luafv commentary.
-    //   0   = freeze (registry-only; 0 plausibly appears in other code paths)
-    //   3   = low-gravity / fly (promote — 3 not plausibly vanilla for this knob)
-    //   222 = void unanchored parts (promote — 222 explicitly cheat-only)
+    // All variants registry-path only. The only public source for the
+    // vanilla default (luafv inline annotation, "100") is a third-party
+    // cheat repo — not authoritative enough to promote small-positive
+    // values like 3 (the curation discipline's "plausibly vanilla" class
+    // explicitly covers any small positive integer). 222 is unusual but
+    // not categorically impossible as an internal debug sentinel. The
+    // live registry path still detects all three.
     RuntimeOverrideRule {
         name: "DFIntDebugSimPrimalLineSearch",
         value: RuntimeFlagValue::Int(0),
@@ -853,12 +888,12 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "DFIntDebugSimPrimalLineSearch",
         value: RuntimeFlagValue::Int(3),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDebugSimPrimalLineSearch",
         value: RuntimeFlagValue::Int(222),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntDebugSimPrimalStiffnessMin/Max — Dantezz "Invisible 3 BEST" ---
@@ -951,12 +986,17 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
 
     // --- DFIntRemoteEventSingleInvocationSizeLimit = 1 (anti-cheat bypass) ---
-    // Server-side anti-cheat that uses RemoteEvents gets starved.
-    // No engineering reason to set this to 1 in any vanilla build.
+    // Registry-path only. Per curation discipline, value `1` is canonical
+    // plausibly-vanilla; even though structurally this value would break
+    // RemoteEvents on a vanilla client (and so the cheat-only argument is
+    // strong), keeping the rule registry-only matches every other `=1` rule
+    // in this table and avoids a heap-scan false positive if Roblox ever
+    // ships an internal test value of 1 in a remote-config blob residing
+    // in heap.
     RuntimeOverrideRule {
         name: "DFIntRemoteEventSingleInvocationSizeLimit",
         value: RuntimeFlagValue::Int(1),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntRenderClampRoughnessMax = -640_000_000 (metallic avatars) ---
@@ -967,10 +1007,16 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
 
     // --- DFIntDebugSimPhysicsSteppingMethodOverride = 10_000_000 (speed cheat) ---
+    // Registry-path only. 10M is ~1/214 of INT_MAX — well short of the
+    // documented "near-int-max" promotion bar (2_147_000_000). For a
+    // `*Override` knob (enum/index by naming convention), legitimate values
+    // are typically small but Roblox does ship large sentinel integers
+    // elsewhere in this table (38_760, 100_000, 15_000); a 10M sentinel is
+    // plausible engineering. The live registry walk still detects this.
     RuntimeOverrideRule {
         name: "DFIntDebugSimPhysicsSteppingMethodOverride",
         value: RuntimeFlagValue::Int(10_000_000),
-        string_scan_promote: true,
+        string_scan_promote: false,
     },
 
     // --- DFIntNewRunningBaseGravityReductionFactorHundredth = 1500 (super jump) ---
@@ -1020,6 +1066,15 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     // `Bool(true)` rules below.
     RuntimeOverrideRule {
         name: "FFlagDebugAvatarChatVisualization",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    // FFlagDebugHumanoidRendering — collision-debug overlay shown on every
+    // humanoid (functions as a soft wallhack). Registry-path only per the
+    // bool-rule discipline. Mega-review noted this was missing from the
+    // override table even though every other ESP-bool sibling has a rule.
+    RuntimeOverrideRule {
+        name: "FFlagDebugHumanoidRendering",
         value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
     },
@@ -2000,10 +2055,15 @@ fn runtime_known_default_label(name: &str) -> Option<String> {
     // bool flag toggles between builds risk false-strikethrough display.
     let label = match name {
         // ESP / wallhack debug bools — must be off in every shipping client.
+        // NOTE: DFFlagDebugDrawEnable is deliberately omitted — captured
+        // clean Roblox memory exports for version-390ba09e7e944154 contain
+        // this value as true (see pin test
+        // `debug_draw_enable_true_default_is_not_live_registry_override_rule`).
+        // Listing it as default=false would render a misleading
+        // strikethrough in the UI on a value Roblox actually ships true.
         "DFFlagAnimatorDrawSkeletonAll"
         | "DFFlagAnimatorDrawSkeletonAttachments"
         | "DFFlagAnimatorDrawSkeletonText"
-        | "DFFlagDebugDrawEnable"
         | "DFFlagDebugDrawBroadPhaseAABBs"
         | "DFFlagDebugDrawBvhNodes"
         | "FFlagDebugAvatarChatVisualization"
@@ -7922,22 +7982,40 @@ mod tests {
     // ===========================================================
 
     #[test]
-    fn data_sender_max_bandwidth_150_is_promoted_via_value_match() {
-        // luafv "Increase Ping" preset uses DFIntDataSenderMaxBandwidthBps=150.
+    fn data_sender_max_bandwidth_150_does_not_fire_string_scan_path() {
+        // Per the mega-review curation tightening, three-digit positive
+        // bandwidth values are NOT eligible for string-scan promotion (they
+        // are in the plausibly-vanilla class). The rule is still present
+        // for the live-registry path, but a bare heap hit must not fire on
+        // its own.
         let b = bytes(r#"{"DFIntDataSenderMaxBandwidthBps":150}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x100000, &mut table);
 
         let findings = findings_from_table(&table);
         assert!(
-            findings.iter().any(|f| {
-                matches!(f.verdict, ScanVerdict::Suspicious)
-                    && f.description.contains("DFIntDataSenderMaxBandwidthBps")
-                    && f.description.contains("= 150")
-            }),
-            "promoted cheat-value rule must fire on its curated value, got: {:?}",
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "bandwidth=150 string-scan must stay clean per curation discipline, got: {:?}",
             findings
         );
+    }
+
+    #[test]
+    fn data_sender_max_bandwidth_rule_exists_for_live_registry_path() {
+        // Sanity: the value-150 and value-555 rules must still be in the
+        // table (registry-only). Without these, the live FastFlag registry
+        // walk wouldn't surface the override either, leaving zero coverage.
+        for value in [150_i32, 555] {
+            let present = RUNTIME_OVERRIDE_RULES.iter().any(|rule| {
+                rule.name == "DFIntDataSenderMaxBandwidthBps"
+                    && rule.value == RuntimeFlagValue::Int(value)
+                    && !rule.string_scan_promote
+            });
+            assert!(
+                present,
+                "DFIntDataSenderMaxBandwidthBps={value} registry-only rule must exist",
+            );
+        }
     }
 
     #[test]
@@ -8032,31 +8110,51 @@ mod tests {
     }
 
     #[test]
-    fn remote_event_single_invocation_size_limit_one_is_promoted() {
-        // Value 1 (Dantezz preset) starves server-side anti-cheat that uses
-        // RemoteEvents. No legit Roblox build uses 1 here.
+    fn remote_event_single_invocation_size_limit_one_does_not_fire_string_scan() {
+        // Per the mega-review curation tightening, value=1 is in the
+        // canonical plausibly-vanilla class and the rule was demoted to
+        // registry-only. The bare heap hit must not raise a verdict on
+        // its own — the live registry walk is responsible for catching it.
         let b = bytes(r#"{"DFIntRemoteEventSingleInvocationSizeLimit":1}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x100600, &mut table);
 
         let findings = findings_from_table(&table);
         assert!(
-            findings.iter().any(|f| {
-                matches!(f.verdict, ScanVerdict::Suspicious)
-                    && f.description.contains("DFIntRemoteEventSingleInvocationSizeLimit")
-            }),
-            "anti-cheat-bypass value 1 must fire, got: {:?}",
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "value=1 string-scan must stay clean per curation discipline, got: {:?}",
             findings
         );
     }
 
     #[test]
-    fn world_step_max_negative_one_is_promoted() {
-        // devforum 4011364 — WorldStepMax negative breaks other-client
-        // physics replication.
+    fn world_step_max_negative_one_does_not_fire_string_scan() {
+        // Per the mega-review curation tightening, -1 is a canonical
+        // sentinel value and was demoted to registry-only. Every other -1
+        // rule in this table is also registry-only.
         let b = bytes(r#"{"DFIntWorldStepMax":-1}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x100700, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "WorldStepMax=-1 string-scan must stay clean per curation discipline, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn world_step_max_with_injector_marker_context_still_fires() {
+        // Coverage protection: a demoted rule should STILL surface as
+        // Flagged when the heap contains nearby injector-context markers.
+        // This is the marker-context promotion path that operates
+        // independently of string_scan_promote.
+        let b = bytes(
+            r#"fflags.json address.json {"DFIntWorldStepMax":-1}"#,
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100750, &mut table);
 
         let findings = findings_from_table(&table);
         assert!(
@@ -8064,7 +8162,7 @@ mod tests {
                 matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
                     && f.description.contains("DFIntWorldStepMax")
             }),
-            "WorldStepMax=-1 must fire (desync exploit), got: {:?}",
+            "WorldStepMax with injector-context markers must still fire, got: {:?}",
             findings
         );
     }
@@ -8086,21 +8184,20 @@ mod tests {
     }
 
     #[test]
-    fn debug_sim_primal_line_search_three_is_promoted() {
-        // luafv: value 3 = low-gravity / fly. Vanilla default 100 per
-        // luafv inline annotation.
+    fn debug_sim_primal_line_search_three_does_not_fire_string_scan() {
+        // Per the mega-review curation tightening, small positive integer
+        // values like 3 are NOT eligible for string-scan promotion (only
+        // the luafv inline annotation supports "vanilla=100", a third-party
+        // single source insufficient to authorize promotion). Rule remains
+        // in the table for the live-registry path.
         let b = bytes(r#"{"DFIntDebugSimPrimalLineSearch":3}"#);
         let mut table = FlagHitTable::default();
         scan_buffer(&b, 0x100900, &mut table);
 
         let findings = findings_from_table(&table);
         assert!(
-            findings.iter().any(|f| {
-                matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
-                    && f.description.contains("DFIntDebugSimPrimalLineSearch")
-                    && f.description.contains("= 3")
-            }),
-            "primal line search = 3 must fire (fly exploit), got: {:?}",
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "primal line search = 3 string-scan must stay clean per discipline, got: {:?}",
             findings
         );
     }
@@ -8156,6 +8253,116 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn debug_draw_enable_is_not_in_known_default_label_table() {
+        // Mega-review pin: DFFlagDebugDrawEnable vanilla=true (per the
+        // separate pin test `debug_draw_enable_true_default_is_not_…`).
+        // The helper MUST NOT return "false" for it — that would render a
+        // misleading strikethrough on a value Roblox actually ships true.
+        // The defensive equivalence here is "no entry at all", since we
+        // are not authoritative on the true value either (it might flip
+        // between builds — we just know the v0.5.x false-positive incident
+        // showed `false` is wrong).
+        assert!(
+            runtime_known_default_label("DFFlagDebugDrawEnable").is_none(),
+            "DFFlagDebugDrawEnable must not be in the default-label table",
+        );
+    }
+
+    #[test]
+    fn minimal_sim_radius_buffer_rule_exists_and_promotes() {
+        // Mega-review gap: the sim-radius preset sets a triple — Min, Max,
+        // and Buffer all at 2_147_000_000. Min and Max were already covered;
+        // Buffer was missing. This pin asserts the triple is complete.
+        let b = bytes(r#"{"DFIntMinimalSimRadiusBuffer":2147000000}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100B00, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious | ScanVerdict::Flagged)
+                    && f.description.contains("DFIntMinimalSimRadiusBuffer")
+            }),
+            "sim-radius Buffer near-INT_MAX must fire (string-scan promote), got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn minimal_sim_radius_buffer_small_value_does_not_fire() {
+        // Negative test: a small positive value (plausible vanilla) must
+        // not fire the curated 2_147_000_000 rule.
+        let b = bytes(r#"{"DFIntMinimalSimRadiusBuffer":16}"#);
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x100B80, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().all(|f| matches!(f.verdict, ScanVerdict::Clean)),
+            "sim-radius Buffer small value must not fire, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn humanoid_rendering_rule_exists_in_registry_table() {
+        // Mega-review gap: every other ESP-bool sibling had a Bool(true)
+        // registry rule; FFlagDebugHumanoidRendering was missing.
+        let present = RUNTIME_OVERRIDE_RULES.iter().any(|rule| {
+            rule.name == "FFlagDebugHumanoidRendering"
+                && rule.value == RuntimeFlagValue::Bool(true)
+                && !rule.string_scan_promote
+        });
+        assert!(
+            present,
+            "FFlagDebugHumanoidRendering=true registry rule must exist",
+        );
+    }
+
+    #[test]
+    fn injector_tool_markers_have_no_duplicates() {
+        // Mega-review found "fflagtoolkit" was declared twice. This pin
+        // catches the regression of any other duplicate slipping in.
+        let mut seen = std::collections::HashSet::new();
+        for &m in INJECTOR_TOOL_MARKERS {
+            assert!(
+                seen.insert(m),
+                "INJECTOR_TOOL_MARKERS contains duplicate entry: {:?}",
+                m
+            );
+        }
+    }
+
+    #[test]
+    fn bare_rbxoffsets_is_not_an_injector_tool_marker() {
+        // Mega-review pin: the .xyz form is the load-bearing marker; the
+        // bare "rbxoffsets" form was removed to avoid colliding with
+        // JSON-key shapes ("rbxoffsets":{…}) Roblox might plausibly ship
+        // internally. Asserting absence here prevents accidental re-adds.
+        assert!(
+            !INJECTOR_TOOL_MARKERS.contains(&"rbxoffsets"),
+            "bare \"rbxoffsets\" must not be in INJECTOR_TOOL_MARKERS — \
+             use \"rbxoffsets.xyz\" instead",
+        );
+        assert!(
+            INJECTOR_TOOL_MARKERS.contains(&"rbxoffsets.xyz"),
+            "\"rbxoffsets.xyz\" must remain in INJECTOR_TOOL_MARKERS",
+        );
+    }
+
+    #[test]
+    fn flag_browser_phrase_is_not_an_injector_tool_marker() {
+        // Mega-review pin: "flag browser" was removed as too generic — a
+        // two-word English phrase prone to colliding with UI labels and
+        // accessibility strings in Roblox heap.
+        assert!(
+            !INJECTOR_TOOL_MARKERS.contains(&"flag browser"),
+            "\"flag browser\" must not be in INJECTOR_TOOL_MARKERS — \
+             too generic, collides with UI labels",
+        );
     }
 
     #[test]

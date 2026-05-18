@@ -383,4 +383,96 @@ describe("FFlag override grouping", () => {
     expect(parsed.injectedValue).toBe("1");
     expect(parsed.defaultValue).toBe("100000");
   });
+
+  it("does NOT mis-split a quoted injected string that incidentally contains ' (default: '", () => {
+    // Mega-review pin: extract_adjacent_value_ascii returns heap-extracted
+    // quoted strings verbatim — they can legitimately contain ' (default: '
+    // as content. The previous parser used unconditional lastIndexOf and
+    // would truncate the value + synthesize a fake strikethrough. After
+    // the fix, inline-default extraction is scoped to baseline-deviation.
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag injection evidence: "FStringSomeFlag" = "this is a (default: configuration)"',
+      details:
+        "Address: 0x100 | Encoding: ascii | Occurrences: 1 | Category: HIGH",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.injectedValue).toBe(
+      '"this is a (default: configuration)"',
+    );
+    expect(parsed.defaultValue).toBeNull();
+  });
+
+  it("scopes inline (default: X) extraction to baseline-deviation kind only", () => {
+    // Sanity: a baseline-deviation finding that *does* end with (default: X)
+    // still parses correctly (the trailing anchor protects the legitimate case).
+    const f: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Live FastFlag deviates from baseline: "FIntCameraFarZPlane" = 1 (default: 100000)',
+      details: null,
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const parsed = parseFFlagOverride(f)!;
+    expect(parsed.injectedValue).toBe("1");
+    expect(parsed.defaultValue).toBe("100000");
+  });
+
+  it("sourceKey upgrades to the winning finding when merge upgrades verdict", () => {
+    // Mega-review fix: when a Flagged live-registry finding merges over a
+    // Suspicious value-match finding for the same (flag, value), the
+    // surviving sourceKey must belong to the Flagged one. This honours
+    // the documented contract: sourceKey locates the surviving rendered
+    // entry, not the first-seen one.
+    const weak: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag value match: "DFIntS2PhysicsSenderRate" = -30',
+      details: "Address: 0x100 | Encoding: ascii | Occurrences: 1 | Category: CRITICAL",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const strong: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details:
+        "PID: 1 | Singleton: 0x0 via heap | Registry entry: 0x0 | Value address: 0x0 | Default: 15 | Detection: live",
+      timestamp: "2026-05-06T12:34:57.000Z",
+    };
+    const { overrides } = partitionFFlagOverrides([weak, strong]);
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].verdict).toBe("Flagged");
+    expect(overrides[0].kind).toBe("live-registry");
+    expect(overrides[0].sourceKey).toBe(findingKey(strong));
+  });
+
+  it("sourceKey preserves first-seen identity when merge does not upgrade", () => {
+    // Symmetric case: if the first finding is already the strongest, the
+    // sourceKey stays put.
+    const strong: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Flagged",
+      description:
+        'Critical live FastFlag registry override: "DFIntS2PhysicsSenderRate" = -30',
+      details: "Default: 15",
+      timestamp: "2026-05-06T12:34:56.000Z",
+    };
+    const weak: ScanFinding = {
+      module: "memory_scanner",
+      verdict: "Suspicious",
+      description:
+        'Suspicious runtime FFlag value match: "DFIntS2PhysicsSenderRate" = -30',
+      details: "Address: 0x100",
+      timestamp: "2026-05-06T12:34:57.000Z",
+    };
+    const { overrides } = partitionFFlagOverrides([strong, weak]);
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].sourceKey).toBe(findingKey(strong));
+  });
 });

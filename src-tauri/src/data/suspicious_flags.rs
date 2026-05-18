@@ -599,7 +599,10 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         // === MEDIUM ===
         "DFIntTaskSchedulerTargetFps" => Some("FPS target. Values like 9999 or 2147483647 uncap framerate."),
         "FFlagDebugDisableTelemetryEphemeralCounter" => Some("Disables telemetry counter. Hides client modification from Roblox analytics."),
-        "FFlagAdServiceEnabled" => Some("Ad service toggle. Set to false to disable ads."),
+        // (FFlagAdServiceEnabled description was retired with the flag's
+        //  move to MEMORY_BASELINE_FLAGS / ALLOWED_FLAGS — see comment in
+        //  the MEDIUM_FLAGS array. The description map is unreachable for
+        //  allowlisted names, so the entry was dead code.)
         "DFIntConnectionMTUSize" => Some("Network MTU size. Non-default values affect packet fragmentation."),
 
         _ => None,

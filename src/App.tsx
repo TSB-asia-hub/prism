@@ -1523,11 +1523,21 @@ const FFLAG_OVERRIDE_PREFIXES: Array<{ prefix: string; kind: FFlagOverrideKind }
   { prefix: "Suspicious runtime FFlag value match: ", kind: "value-match" },
 ];
 
-// Parse the description body `"FlagName" = value` (possibly followed by
-// ` (default: X)` for the baseline-deviation path). Returns null if the
+// Parse the description body `"FlagName" = value`. Returns null if the
 // shape doesn't match — caller treats null as "not an FFlag override
 // finding" and renders the original row instead.
-function parseFFlagOverrideBody(body: string): {
+//
+// `extractInlineDefault` controls whether to peel a trailing ` (default: X)`
+// segment off the body. The baseline-deviation backend path is the ONLY
+// emission template that uses that shape (its description ends with
+// "= <value> (default: <default>)"); other paths' injected values are
+// arbitrary heap-extracted strings that may legitimately contain the
+// substring ` (default: ` as content — extracting unconditionally would
+// truncate the injected value and synthesize a phony default for the UI.
+function parseFFlagOverrideBody(
+  body: string,
+  extractInlineDefault: boolean,
+): {
   flagName: string;
   injectedValue: string;
   inlineDefault: string | null;
@@ -1542,22 +1552,26 @@ function parseFFlagOverrideBody(body: string): {
   if (!flagName || flagName.length > 128) return null;
   const after = body.slice(closeQuote + 4); // skip past `" = `
 
-  // Optional ` (default: X)` trailing block in the baseline-deviation case.
-  // We don't use a regex with backreferences because `X` can contain
-  // arbitrary characters including `)` for some int values like `-1)`.
+  if (!extractInlineDefault) {
+    return { flagName, injectedValue: after.trim(), inlineDefault: null };
+  }
+
+  // Baseline-deviation path only: anchor `(default: X)` to the very end of
+  // the body so a stray ` (default: ` inside a heap-extracted string can
+  // never reach this branch. `runtime_value_label` on the backend emits
+  // only bool/int — never a value containing `)`, so this anchor is exact.
   const defaultMarker = " (default: ";
+  if (!after.endsWith(")")) {
+    return { flagName, injectedValue: after.trim(), inlineDefault: null };
+  }
   const defaultStart = after.lastIndexOf(defaultMarker);
   if (defaultStart < 0) {
     return { flagName, injectedValue: after.trim(), inlineDefault: null };
   }
-  const injectedValue = after.slice(0, defaultStart).trim();
-  const closingParen = after.lastIndexOf(")");
-  if (closingParen < defaultStart + defaultMarker.length) {
-    return { flagName, injectedValue: after.trim(), inlineDefault: null };
-  }
   const inlineDefault = after
-    .slice(defaultStart + defaultMarker.length, closingParen)
+    .slice(defaultStart + defaultMarker.length, after.length - 1)
     .trim();
+  const injectedValue = after.slice(0, defaultStart).trim();
   return { flagName, injectedValue, inlineDefault };
 }
 
@@ -1574,7 +1588,10 @@ export function parseFFlagOverride(finding: ScanFinding): FFlagOverride | null {
   );
   if (!match) return null;
   const body = finding.description.slice(match.prefix.length);
-  const parsed = parseFFlagOverrideBody(body);
+  // Only the baseline-deviation backend path appends `(default: X)` to the
+  // description. Other paths' values come from heap extraction and can
+  // legitimately contain the substring as content — see parseFFlagOverrideBody.
+  const parsed = parseFFlagOverrideBody(body, match.kind === "baseline-deviation");
   if (!parsed) return null;
 
   // Default value sources, by priority:
@@ -1639,12 +1656,17 @@ export function partitionFFlagOverrides(findings: ScanFinding[]): {
       continue;
     }
     // Merge: keep the stronger verdict; prefer the entry that has a
-    // defaultValue if the existing one didn't.
+    // defaultValue if the existing one didn't. When verdict or kind
+    // upgrades we also adopt the upgrading finding's sourceKey, so the
+    // surviving sourceKey always belongs to the finding whose verdict+kind
+    // is the one rendered. This honours the contract documented on the
+    // FFlagOverride type — sourceKey "locates the underlying row again".
     const winner: FFlagOverride = { ...existing };
     if (
       VERDICT_PRIORITY[parsed.verdict] > VERDICT_PRIORITY[existing.verdict]
     ) {
       winner.verdict = parsed.verdict;
+      winner.sourceKey = parsed.sourceKey;
     }
     if (!winner.defaultValue && parsed.defaultValue) {
       winner.defaultValue = parsed.defaultValue;
@@ -1659,6 +1681,9 @@ export function partitionFFlagOverrides(findings: ScanFinding[]): {
     };
     if (KIND_PRIORITY[parsed.kind] > KIND_PRIORITY[existing.kind]) {
       winner.kind = parsed.kind;
+      // Adopt sourceKey on kind-only upgrades too, so the surviving key
+      // matches the rendered (verdict, kind) tuple.
+      winner.sourceKey = parsed.sourceKey;
     }
     byKey.set(dedupeKey, winner);
   }
