@@ -915,6 +915,39 @@ mod tests {
     }
 
     #[test]
+    fn expanded_public_preset_flags_are_classified() {
+        let json = r#"{
+            "DFFlagAssemblyExtentsExpansionStudHundredth": -50,
+            "DFIntCullFactorPixelThresholdMainViewHighQuality": 10000
+        }"#;
+        let dir = tmpdir();
+        let path = dir.join("ClientAppSettings.json");
+
+        let mut findings = Vec::new();
+        check_flat_json_flags(json, &path, &mut findings);
+
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Flagged)
+                    && f.description
+                        .contains("DFFlagAssemblyExtentsExpansionStudHundredth")
+            }),
+            "public noclip variant must be Flagged; got: {:?}",
+            findings
+        );
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description
+                        .contains("DFIntCullFactorPixelThresholdMainViewHighQuality")
+            }),
+            "public xray cull threshold must be Suspicious; got: {:?}",
+            findings
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn unrelated_nonprefix_keys_are_ignored() {
         let json = r#"{"LauncherTheme": "dark"}"#;
         let dir = tmpdir();

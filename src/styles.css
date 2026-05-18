@@ -954,6 +954,76 @@ button {
   font-style: italic;
 }
 
+.memory-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.memory-flags__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.memory-flags__header span:last-child {
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-flags__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 6px;
+}
+
+.memory-flag {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.memory-flag__name {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.memory-flag__value {
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-flags__note {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* Empty state */
 .empty {
   display: flex;

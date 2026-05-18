@@ -8,6 +8,7 @@ import {
   hasTauriRuntime,
   importBadgeTitle,
   parseFindingDetails,
+  parseMemoryFlagEvidence,
   relativeTime,
   shortTime,
   truncate,
@@ -94,6 +95,44 @@ describe("App UI helpers", () => {
         { label: "Detection", value: "live" },
       ],
       freeform: null,
+    });
+  });
+
+  it("extracts memory scanner flags from grouped detected-flag details", () => {
+    const result = parseMemoryFlagEvidence(
+      finding("Flagged", {
+        module: "memory_scanner",
+        description: "Critical live Roblox runtime-variable overrides",
+        details:
+          "Detected flags: 2 total\n- DFIntS2PhysicsSenderRate=1\n- DFFlagAssemblyExtentsExpansionStudHundredth=-50 | Detection: live memory",
+      }),
+    );
+
+    expect(result).toEqual({
+      flags: [
+        { name: "DFIntS2PhysicsSenderRate", value: "1" },
+        { name: "DFFlagAssemblyExtentsExpansionStudHundredth", value: "-50" },
+      ],
+      detection: "live memory",
+    });
+  });
+
+  it("cleans legacy memory matches by dropping addresses and defaults", () => {
+    const result = parseMemoryFlagEvidence(
+      finding("Flagged", {
+        module: "memory_scanner",
+        description: "Critical live Roblox runtime-variable overrides",
+        details:
+          "PID: 1848 | Matches: DFIntA=9999 @0x7FF, DFIntB=1 (file default 15) @0x800 | Detection: cache",
+      }),
+    );
+
+    expect(result).toEqual({
+      flags: [
+        { name: "DFIntA", value: "9999" },
+        { name: "DFIntB", value: "1" },
+      ],
+      detection: "cache",
     });
   });
 

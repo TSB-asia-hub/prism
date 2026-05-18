@@ -1249,7 +1249,7 @@ const FindingRow = memo(function FindingRow({
           {/* Only render the inner content when open. The outer
               .row__details box is kept unconditionally so the CSS
               max-height transition still has something to animate. */}
-          {open ? <FindingDetails details={f.details} /> : null}
+          {open ? <FindingDetails finding={f} /> : null}
         </div>
       </div>
     </div>
@@ -1266,6 +1266,7 @@ const FindingRow = memo(function FindingRow({
 // like a `Capitalized-key:` so commas inside paths or notes don't shred
 // values. Anything that doesn't parse as KV is rendered as a freeform note.
 type DetailField = { label: string; value: string };
+type MemoryFlagValue = { name: string; value: string };
 
 export function parseFindingDetails(details: string): {
   fields: DetailField[];
@@ -1302,6 +1303,79 @@ export function parseFindingDetails(details: string): {
   };
 }
 
+function splitMemoryFlagChunks(value: string): string[] {
+  const withoutCount = value.replace(/^\s*\d+\s+total\s*/i, "").trim();
+  if (!withoutCount) return [];
+  const bulletLines = withoutCount
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("-"));
+  if (bulletLines.length > 0) return bulletLines;
+  return withoutCount
+    .split(/,\s+(?=[A-Za-z][A-Za-z0-9_]*\s*=)/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+}
+
+function parseMemoryFlagChunk(chunk: string): MemoryFlagValue | null {
+  const normalized = chunk
+    .replace(/^\s*-\s*/, "")
+    .replace(/\s+@0x[0-9a-fA-F]+\s*$/, "")
+    .replace(/\s+\(file default [^)]+\)\s*$/i, "")
+    .trim();
+  const match = normalized.match(/^([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  if (!match) return null;
+  const name = match[1].trim();
+  const value = match[2].trim().replace(/\s+@0x[0-9a-fA-F]+.*$/, "");
+  if (!name || !value) return null;
+  return { name, value };
+}
+
+function parseDescriptionFlag(description: string): MemoryFlagValue | null {
+  const match = description.match(/"([A-Za-z][A-Za-z0-9_]*)"\s*=\s*([^\s]+)/);
+  if (!match) return null;
+  return { name: match[1], value: match[2].replace(/[),.;]+$/, "") };
+}
+
+export function parseMemoryFlagEvidence(finding: Pick<ScanFinding, "module" | "description" | "details">): {
+  flags: MemoryFlagValue[];
+  detection: string | null;
+} | null {
+  if (finding.module !== "memory_scanner") return null;
+  const fields = finding.details ? parseFindingDetails(finding.details).fields : [];
+  const flagLabels = new Set([
+    "Detected flags",
+    "Injected flags",
+    "Live flags",
+    "Matches",
+    "Exact curated matches",
+    "Uncurated changed cached values",
+  ]);
+  const flags: MemoryFlagValue[] = [];
+  for (const field of fields) {
+    if (!flagLabels.has(field.label)) continue;
+    for (const chunk of splitMemoryFlagChunks(field.value)) {
+      const flag = parseMemoryFlagChunk(chunk);
+      if (flag) flags.push(flag);
+    }
+  }
+  if (flags.length === 0) {
+    const fromDescription = parseDescriptionFlag(finding.description);
+    if (fromDescription) flags.push(fromDescription);
+  }
+  if (flags.length === 0) return null;
+
+  const seen = new Set<string>();
+  const uniqueFlags = flags.filter((flag) => {
+    const key = `${flag.name}\0${flag.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const detection = fields.find((field) => field.label === "Detection")?.value ?? null;
+  return { flags: uniqueFlags, detection };
+}
+
 function pathFieldAction(finding: ScanFinding): FieldAction | null {
   if (evidenceSurface(finding) !== "files" || !finding.details) {
     return null;
@@ -1321,18 +1395,24 @@ async function openFindingFolder(path: string): Promise<void> {
   await invoke("open_finding_folder", { path });
 }
 
-function FindingDetails({ details }: { details: string | null }) {
+function FindingDetails({ finding }: { finding: ScanFinding }) {
   const [copied, setCopied] = useState(false);
+  const details = finding.details;
   const parsed = useMemo(
     () => (details ? parseFindingDetails(details) : null),
     [details],
   );
+  const memoryEvidence = useMemo(
+    () => parseMemoryFlagEvidence(finding),
+    [finding],
+  );
   const handleCopy = useCallback(
     async (e: ReactMouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
-      if (!details) return;
+      const copyText = details ?? finding.description;
+      if (!copyText) return;
       try {
-        await navigator.clipboard.writeText(details);
+        await navigator.clipboard.writeText(copyText);
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1600);
       } catch (err) {
@@ -1340,11 +1420,8 @@ function FindingDetails({ details }: { details: string | null }) {
         console.error("Copy evidence failed:", err);
       }
     },
-    [details],
+    [details, finding.description],
   );
-  if (!details || !parsed) {
-    return <span className="row__details-empty">No additional details.</span>;
-  }
   const copyButton = (
     <div className="row__details-toolbar">
       <button
@@ -1357,6 +1434,33 @@ function FindingDetails({ details }: { details: string | null }) {
       </button>
     </div>
   );
+  if (memoryEvidence) {
+    return (
+      <>
+        {copyButton}
+        <div className="memory-flags">
+          <div className="memory-flags__header">
+            <span>Detected flags</span>
+            <span>{memoryEvidence.flags.length}</span>
+          </div>
+          <div className="memory-flags__list">
+            {memoryEvidence.flags.map((flag, i) => (
+              <div className="memory-flag" key={`${flag.name}-${flag.value}-${i}`}>
+                <span className="memory-flag__name">{flag.name}</span>
+                <span className="memory-flag__value">{flag.value}</span>
+              </div>
+            ))}
+          </div>
+          {memoryEvidence.detection && (
+            <p className="memory-flags__note">{memoryEvidence.detection}</p>
+          )}
+        </div>
+      </>
+    );
+  }
+  if (!details || !parsed) {
+    return <span className="row__details-empty">No additional details.</span>;
+  }
   if (parsed.fields.length === 0) {
     return (
       <>
