@@ -20,6 +20,9 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntPhysicsSenderMaxBandwidthBpsScaling",
     // Data sender rate; -1 = block all data replication
     "DFIntDataSenderRate",
+    // Low data-sender bandwidth values intentionally create lag-switch /
+    // replication starvation behavior in public presets.
+    "DFIntDataSenderMaxBandwidthBps",
     // Touch sender bandwidth; -1 = block touch replication
     "DFIntTouchSenderMaxBandwidthBps",
     // ---- Simulation radius expansion (network ownership theft) ----
@@ -55,11 +58,16 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     // ---- Noclip / collision bypass ----
     // Shrinks assembly collision extents; negative = pass through walls
     "DFIntAssemblyExtentsExpansionStudHundredth",
+    // Mis-prefixed variant from public noclip presets.
+    "DFFlagAssemblyExtentsExpansionStudHundredth",
     // Limits broad-phase collision pair count; low value = noclip
     "DFIntSimBroadPhasePairCountMax",
     // Primal solver manipulation for noclip/physics bypass
     "FFlagDebugSimDefaultPrimalSolver",
+    "DFFlagDebugSimPrimalFeedback",
     "DFIntDebugSimPrimalStiffness",
+    "DFIntDebugSimPrimalStiffnessMin",
+    "DFIntDebugSimPrimalStiffnessMax",
     "DFIntMaximumFreefallMoveTimeInTenths",
     // ---- Physics engine gravity / force manipulation ----
     // Extreme values cause flying, super-jump, moon gravity
@@ -71,10 +79,12 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntMaximumUnstickForceInGs",
     "DFIntUnstickForceAttackInTenths",
     "DFIntPhysicsDecompForceUpgradeVersion",
+    "FIntPGSAngularDampingPermilPersecond",
     // ---- Simulation timestep manipulation ----
     "FFlagSimAdaptiveTimesteppingDefault2",
     "DFFlagSimHumanoidTimestepModelUpdate",
     "DFIntSimExplicitlyCappedTimestepMultiplier",
+    "DFIntTimestepArbiterThresholdCFLThou",
     "DFIntMaxTimestepMultiplierAcceleration",
     "DFIntMaxTimestepMultiplierBuoyancy",
     "DFIntMaxTimestepMultiplierConstraint",
@@ -117,6 +127,10 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     "DFIntMaxDataPacketPerSend",
     "DFIntServerMaxBandwidth",
     "DFIntAngularVelocityLimit",
+    "FIntPhysicsGridHierarchyLowestLevelInitBinCount",
+    "FIntPhysicsGridHierarchyLowestLevelInitBinCountWorldModel",
+    "FIntPhysicsSolverCollisionPoolBucketSize",
+    "FIntPhysicsSolverCollisionPoolBucketSizeWorldModel",
     // ---- Max active animation tracks (animation freeze) ----
     "DFIntMaxActiveAnimationTracks",
     "FFlagProcessAnimationLooped",
@@ -175,6 +189,10 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FIntCameraFarZPlane",
     // Restrict GC distance = 1 makes most geometry invisible
     "DFIntDebugRestrictGCDistance",
+    // Public X-ray presets raise main-view cull thresholds so some camera
+    // positions render geometry transparently.
+    "DFIntCullFactorPixelThresholdMainViewHighQuality",
+    "DFIntCullFactorPixelThresholdMainViewLowQuality",
     // ---- Camera manipulation (zoom/FOV advantage) ----
     // Extreme zoom distance gives sniper-like view in close-quarters games
     "FIntCameraMaxZoomDistance",
@@ -238,6 +256,7 @@ pub static HIGH_FLAGS: &[&str] = &[
     // Dont render screen GUI (hide all UI overlays)
     "FFlagDebugDontRenderScreenGui",
     "FFlagDebugDontRenderUI",
+    "FFlagDebugAdornsDisabled",
     // ---- Roughness manipulation (shiny avatars = easier to spot) ----
     "DFIntRenderClampRoughnessMax",
     // ---- Interpolation visualizer (network position debug overlay) ----
@@ -245,6 +264,7 @@ pub static HIGH_FLAGS: &[&str] = &[
     // ---- Debug display overlays ----
     "FFlagDebugDisplayUnthemedInstances",
     "FFlagDebugLightGridShowChunks",
+    "DFFlagDebugEnableStreamingSolverVisualization",
     "FFlagTrackerLodControllerDebugUI",
     // ---- Particle / sky / visual stripping ----
     // (FFlagDebugSkyGray and DFFlagDebugPauseVoxelizer are on Roblox's
@@ -374,6 +394,8 @@ pub static MEDIUM_FLAGS: &[&str] = &[
 
     // ---- Debug flag state display ----
     "FStringDebugShowFlagState",
+    "FFlagDebugTextBoxServiceShowOverlay",
+    "DFIntTextBoxServiceHistorySize",
     // ---- DFIntDebugSimPhysicsSteppingMethodOverride ----
     "DFIntDebugSimPhysicsSteppingMethodOverride",
     // ---- Render distance culling ----
@@ -415,6 +437,9 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FFlagUserCameraControlLastInputTypeUpdate",
     // ---- Debug heap dump ----
     "FFlagDebugLuaHeapDump",
+    // ---- Misc public debug toggles / forced outcomes ----
+    "FFlagDebugRomarkMockingAudioDevices",
+    "FFlagDebugAnalyticsForceLotteryWin",
 ];
 
 // =============================================================================
@@ -495,6 +520,7 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "DFIntPhysicsSenderMaxBandwidthBpsScaling" => Some("Scaling factor for physics sender bandwidth; 0 disables scaling."),
         "DFIntDataSenderRate" => Some("Controls data replication rate. Value -1 blocks all data replication."),
         "DFIntTouchSenderMaxBandwidthBps" => Some("Touch event bandwidth cap. Value -1 blocks touch replication."),
+        "DFIntDataSenderMaxBandwidthBps" => Some("Data sender bandwidth cap. Public presets use low values to starve replication and create fake lag."),
         "DFIntMinClientSimulationRadius" => Some("Minimum client simulation radius. Value 2147000000 claims ownership of all objects."),
         "DFIntMinimalSimRadiusBuffer" => Some("Simulation radius buffer. Extreme values expand network ownership."),
         "DFIntMaxClientSimulationRadius" => Some("Maximum client simulation radius. Value 2147000000 for total map control."),
@@ -504,8 +530,12 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "DFIntReplicatorAnimationTrackLimitPerAnimator" => Some("Animation track replication limit. Value -1 hides all animations from other players."),
         "DFIntGameNetPVHeaderTranslationZeroCutoffExponent" => Some("Position header zero cutoff. Value 10 zeros out position data, causing invisibility."),
         "DFIntAssemblyExtentsExpansionStudHundredth" => Some("Assembly collision extents. Value -50 shrinks hitbox, enabling noclip."),
+        "DFFlagAssemblyExtentsExpansionStudHundredth" => Some("Mis-prefixed public noclip variant of assembly extents expansion."),
         "DFIntSimBroadPhasePairCountMax" => Some("Broad-phase collision pair limit. Low values disable collision detection (noclip)."),
         "FFlagDebugSimDefaultPrimalSolver" => Some("Enables primal solver. Combined with stiffness=0, enables noclip/flying."),
+        "DFFlagDebugSimPrimalFeedback" => Some("Debug primal-solver feedback toggle used in public invisibility/noclip chains."),
+        "DFIntDebugSimPrimalStiffnessMin" => Some("Primal solver min stiffness. Value 0 is used in public invisibility chains."),
+        "DFIntDebugSimPrimalStiffnessMax" => Some("Primal solver max stiffness. Value 0 is used in public invisibility chains."),
         "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier" => Some("PD controller substep multiplier. Value -999999 causes extreme gravity manipulation."),
         "DFIntSolidFloorPercentForceApplication" => Some("Solid floor force. Value -1000 causes character to fly/phase through floors."),
         "DFIntNonSolidFloorPercentForceApplication" => Some("Non-solid floor force. Value -5000 causes extreme floor phasing."),
@@ -520,6 +550,9 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "DFIntMaxActiveAnimationTracks" => Some("Max active animation tracks. Value 0 freezes all animations."),
         "DFIntDebugSimPrimalLineSearch" => Some("Primal solver line search. Various values cause gravity/flight exploits."),
         "DFIntDebugSimPrimalStiffness" => Some("Primal solver stiffness. Value 0 disables physics constraints (noclip)."),
+        "DFIntUnstickForceAttackInTenths" => Some("Unstick-force attack tuning. Negative public values are used for wall-glide movement exploits."),
+        "DFIntMaxAltitudePDStickHipHeightPercent" => Some("Hip-height force tuning. Negative public values create bounce / hover-style movement anomalies."),
+        "DFIntTimestepArbiterThresholdCFLThou" => Some("Timestep arbiter threshold. Extreme public values can crash or destabilize simulation timing."),
 
         // === HIGH: Visual Advantage ===
         "DFFlagDebugDrawBroadPhaseAABBs" => Some("Draws outlines around every part/humanoid. Functions as wallhack."),
@@ -528,6 +561,8 @@ pub fn get_flag_description(flag_name: &str) -> Option<&'static str> {
         "DFFlagAnimatorDrawSkeletonAll" => Some("Renders full skeleton on all avatars through walls (ESP)."),
         "FFlagDebugHumanoidRendering" => Some("Shows humanoid collision debug info through walls."),
         "FIntCameraFarZPlane" => Some("Camera far Z plane. Value 1 creates x-ray vision effect."),
+        "DFIntCullFactorPixelThresholdMainViewHighQuality" => Some("Main-view culling threshold. Public X-ray presets use high values to make geometry transparent."),
+        "DFIntCullFactorPixelThresholdMainViewLowQuality" => Some("Main-view culling threshold. Public X-ray presets use high values to make geometry transparent."),
         "FIntCameraMaxZoomDistance" => Some("Camera max zoom. Value 9999+ gives extreme zoom-out advantage."),
         "DFIntDebugRestrictGCDistance" => Some("Garbage collection distance. Value 1 makes most geometry invisible."),
         "DFIntAnimationLodFacsDistanceMin" => Some("Animation LOD min distance. Value 0 renders all player animations at max detail."),

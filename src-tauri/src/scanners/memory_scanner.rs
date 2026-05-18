@@ -392,6 +392,11 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
     RuntimeOverrideRule {
         name: "DFIntS2PhysicsSenderRate",
+        value: RuntimeFlagValue::Int(3),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntS2PhysicsSenderRate",
         value: RuntimeFlagValue::Int(-30),
         string_scan_promote: true,
     },
@@ -413,6 +418,11 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "DFIntDataSenderRate",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDataSenderMaxBandwidthBps",
+        value: RuntimeFlagValue::Int(150),
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
@@ -476,14 +486,44 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         string_scan_promote: true,
     },
     RuntimeOverrideRule {
+        name: "DFIntAssemblyExtentsExpansionStudHundredth",
+        value: RuntimeFlagValue::Int(-30),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagAssemblyExtentsExpansionStudHundredth",
+        value: RuntimeFlagValue::Int(-50),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
         name: "DFIntSimBlockLargeLocalToolWeldManipulationsThreshold",
         value: RuntimeFlagValue::Int(-1),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagDebugSimPrimalFeedback",
+        value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
         name: "DFIntDebugSimPrimalStiffness",
         value: RuntimeFlagValue::Int(0),
         string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalStiffnessMin",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugSimPrimalStiffnessMax",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaximumFreefallMoveTimeInTenths",
+        value: RuntimeFlagValue::Int(1_000),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntSimAdaptiveHumanoidPDControllerSubstepMultiplier",
@@ -501,6 +541,21 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         string_scan_promote: true,
     },
     RuntimeOverrideRule {
+        name: "DFIntNewRunningBaseGravityReductionFactorHundredth",
+        value: RuntimeFlagValue::Int(1_500),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxAltitudePDStickHipHeightPercent",
+        value: RuntimeFlagValue::Int(-200),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUnstickForceAttackInTenths",
+        value: RuntimeFlagValue::Int(-4),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
         name: "DFIntHipHeightClamp",
         value: RuntimeFlagValue::Int(-48),
         string_scan_promote: true,
@@ -513,6 +568,11 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     RuntimeOverrideRule {
         name: "DFIntRaycastMaxDistance",
         value: RuntimeFlagValue::Int(3),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntMaxMissedWorldStepsRemembered",
+        value: RuntimeFlagValue::Int(1),
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
@@ -546,9 +606,49 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
+        name: "FIntCameraMaxZoomDistance",
+        value: RuntimeFlagValue::Int(9_999),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntCameraMaxZoomDistance",
+        value: RuntimeFlagValue::Int(16_384),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
         name: "DFIntDebugRestrictGCDistance",
         value: RuntimeFlagValue::Int(1),
         string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewHighQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdMainViewLowQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapHighQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapLowQuality",
+        value: RuntimeFlagValue::Int(10_000),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapHighQuality",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntCullFactorPixelThresholdShadowMapLowQuality",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
     },
     RuntimeOverrideRule {
         name: "DFIntAnimationLodFacsDistanceMin",
@@ -566,6 +666,16 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         string_scan_promote: false,
     },
     RuntimeOverrideRule {
+        name: "DFIntTextureCompositorActiveJobs",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntRenderClampRoughnessMax",
+        value: RuntimeFlagValue::Int(-640_000_000),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
         name: "FFlagDisablePostFx",
         value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
@@ -577,6 +687,11 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
     },
     RuntimeOverrideRule {
         name: "FFlagDebugDontRenderUI",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FFlagDebugAdornsDisabled",
         value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
     },
@@ -747,6 +862,51 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         name: "DFIntMaxProcessPacketsJobScaling",
         value: RuntimeFlagValue::Int(10_000),
         string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntTaskSchedulerTargetFps",
+        value: RuntimeFlagValue::Int(9_999),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntTaskSchedulerTargetFps",
+        value: RuntimeFlagValue::Int(29_383),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntTaskSchedulerTargetFps",
+        value: RuntimeFlagValue::Int(5_588_562),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPGSAngularDampingPermilPersecond",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntTimestepArbiterThresholdCFLThou",
+        value: RuntimeFlagValue::Int(0),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsGridHierarchyLowestLevelInitBinCount",
+        value: RuntimeFlagValue::Int(199_999_999),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsGridHierarchyLowestLevelInitBinCountWorldModel",
+        value: RuntimeFlagValue::Int(100_000_000),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsSolverCollisionPoolBucketSize",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "FIntPhysicsSolverCollisionPoolBucketSizeWorldModel",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
     },
 ];
 
@@ -1569,6 +1729,25 @@ fn runtime_value_label(value: RuntimeFlagValue) -> String {
     }
 }
 
+fn detected_flag_detail(name: &str, value: &str, detection: &str) -> String {
+    format!(
+        "Detected flags: 1 total\n- {}={} | Detection: {}",
+        name, value, detection
+    )
+}
+
+fn detected_flag_detail_with_default(
+    name: &str,
+    value: &str,
+    default_value: &str,
+    detection: &str,
+) -> String {
+    format!(
+        "Detected flags: 1 total\n- {}={} | Default: {} | Detection: {}",
+        name, value, default_value, detection
+    )
+}
+
 fn runtime_value_from_raw(raw_value: [u8; 4], shape: RuntimeFlagValue) -> RuntimeFlagValue {
     let observed_int = i32::from_le_bytes(raw_value);
     match shape {
@@ -1578,11 +1757,11 @@ fn runtime_value_from_raw(raw_value: [u8; 4], shape: RuntimeFlagValue) -> Runtim
 }
 
 fn runtime_flag_baseline_finding(
-    pid: u32,
+    _pid: u32,
     baseline: &RuntimeFlagBaseline,
-    singleton: usize,
-    entry: usize,
-    value_ptr: usize,
+    _singleton: usize,
+    _entry: usize,
+    _value_ptr: usize,
     raw_value: [u8; 4],
 ) -> Option<ScanFinding> {
     let observed = runtime_value_from_raw(raw_value, baseline.default_value);
@@ -1599,19 +1778,21 @@ fn runtime_flag_baseline_finding(
             runtime_value_label(observed),
             runtime_value_label(baseline.default_value)
         ),
-        Some(format!(
-            "PID: {} | Singleton: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Note: {}",
-            pid, singleton, entry, value_ptr, baseline.note
+        Some(detected_flag_detail_with_default(
+            baseline.name,
+            &runtime_value_label(observed),
+            &runtime_value_label(baseline.default_value),
+            baseline.note,
         )),
     ))
 }
 
 fn runtime_node_baseline_finding(
-    pid: u32,
+    _pid: u32,
     baseline: &RuntimeFlagBaseline,
-    candidate: &RuntimeNodeEntryCandidate,
-    node_entry_summary: &str,
-    value_ptr: usize,
+    _candidate: &RuntimeNodeEntryCandidate,
+    _node_entry_summary: &str,
+    _value_ptr: usize,
     raw_value: [u8; 4],
 ) -> Option<ScanFinding> {
     let observed = runtime_value_from_raw(raw_value, baseline.default_value);
@@ -1628,15 +1809,11 @@ fn runtime_node_baseline_finding(
             runtime_value_label(observed),
             runtime_value_label(baseline.default_value)
         ),
-        Some(format!(
-            "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Note: {}",
-            pid,
-            candidate.node_address,
-            candidate.string_address,
-            candidate.entry,
-            value_ptr,
-            node_entry_summary,
-            baseline.note
+        Some(detected_flag_detail_with_default(
+            baseline.name,
+            &runtime_value_label(observed),
+            &runtime_value_label(baseline.default_value),
+            baseline.note,
         )),
     ))
 }
@@ -2880,7 +3057,6 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                 let desc = get_flag_description(name)
                     .map(|d| format!(" | {}", d))
                     .unwrap_or_default();
-                let encoding = if sample.wide { "utf16" } else { "ascii" };
                 let label = match verdict {
                     ScanVerdict::Flagged => "Critical runtime FFlag injection evidence",
                     ScanVerdict::Suspicious => "Suspicious runtime FFlag injection evidence",
@@ -2891,10 +3067,9 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                     verdict,
                     format!("{}: \"{}\" = {}", label, name, sample.value),
                     Some(format!(
-                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{} | Context: value was within {} bytes of injector/offset-tool provenance | Observed markers: {}",
-                        sample.address,
-                        encoding,
-                        hit.count,
+                        "Detected flags: 1 total\n- {}={} | Category: {}{} | Detection: value was within {} bytes of injector/offset-tool provenance ({})",
+                        name,
+                        sample.value,
                         category,
                         desc,
                         INJECTOR_CONTEXT_WINDOW_BYTES,
@@ -2913,7 +3088,6 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                 let desc = get_flag_description(name)
                     .map(|d| format!(" | {}", d))
                     .unwrap_or_default();
-                let encoding = if sample.wide { "utf16" } else { "ascii" };
                 out.push(ScanFinding::new(
                     "memory_scanner",
                     ScanVerdict::Suspicious,
@@ -2922,10 +3096,9 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
                         name, sample.value
                     ),
                     Some(format!(
-                        "Address: 0x{:X} | Encoding: {} | Occurrences: {} | Category: {}{} | Detection: parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious)",
-                        sample.address,
-                        encoding,
-                        hit.count,
+                        "Detected flags: 1 total\n- {}={} | Category: {}{} | Detection: parsed value matches a curated injector cheat-value rule (no nearby tool markers; capped at Suspicious)",
+                        name,
+                        sample.value,
                         category,
                         desc,
                     )),
@@ -4072,18 +4245,11 @@ mod windows_impl {
                         rule.name,
                         runtime_value_label(rule.value)
                     ),
-                    Some({
-                        let origin = candidate
-                            .slot
-                            .map(|slot| format!("{} at slot 0x{:X}", candidate.source, slot))
-                            .unwrap_or_else(|| {
-                                format!("{} at table 0x{:X}", candidate.source, candidate.table)
-                            });
-                        format!(
-                            "PID: {} | Singleton: 0x{:X} via {} | Registry entry: 0x{:X} | Value address: 0x{:X} | Detection: resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
-                            pid, candidate.singleton, origin, entry, value_ptr
-                        )
-                    }),
+                    Some(detected_flag_detail(
+                        rule.name,
+                        &runtime_value_label(rule.value),
+                        "resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                    )),
                 ));
             }
             findings.extend(inspect_runtime_flag_baselines_for_candidate(
@@ -4288,32 +4454,40 @@ mod windows_impl {
         }
     }
 
-    fn render_config_config_only_values(
-        cache_obj: &serde_json::Map<String, serde_json::Value>,
-    ) -> Vec<String> {
+    fn render_config_config_values_by_cache_key() -> HashMap<String, (String, String)> {
         let Some(config_path) = render_config_plain_config_path() else {
-            return Vec::new();
+            return HashMap::new();
         };
         let Ok(content) = std::fs::read_to_string(config_path) else {
-            return Vec::new();
+            return HashMap::new();
         };
         let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-            return Vec::new();
+            return HashMap::new();
         };
         let Some(config_obj) = parsed.as_object() else {
-            return Vec::new();
+            return HashMap::new();
         };
 
-        let mut out = Vec::new();
+        let mut out = HashMap::new();
         for (flag_name, value) in config_obj {
-            if cache_obj.contains_key(render_config_cache_key(flag_name)) {
+            out.insert(
+                render_config_cache_key(flag_name).to_string(),
+                (flag_name.to_string(), render_config_json_value_label(value)),
+            );
+        }
+        out
+    }
+
+    fn render_config_config_only_values(
+        cache_obj: &serde_json::Map<String, serde_json::Value>,
+        config_values: &HashMap<String, (String, String)>,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        for (cache_key, (flag_name, value)) in config_values {
+            if cache_obj.contains_key(cache_key) {
                 continue;
             }
-            out.push(format!(
-                "{}={}",
-                flag_name,
-                render_config_json_value_label(value)
-            ));
+            out.push(format!("{}={}", flag_name, value));
         }
         out.sort_unstable();
         out
@@ -4428,7 +4602,7 @@ mod windows_impl {
 
     fn inspect_render_config_cache(
         handle: HANDLE,
-        pid: u32,
+        _pid: u32,
         exe_path: Option<&str>,
         cache_path: std::path::PathBuf,
         trust: RenderConfigCacheTrust,
@@ -4443,7 +4617,8 @@ mod windows_impl {
             return None;
         };
 
-        let config_only_values = render_config_config_only_values(obj);
+        let config_values = render_config_config_values_by_cache_key();
+        let config_only_values = render_config_config_only_values(obj, &config_values);
         let image_defaults = PeImageDefaults::load(exe_path);
         let main_module = main_module_info_windows(handle);
         let mut exact_matches = Vec::new();
@@ -4475,16 +4650,7 @@ mod windows_impl {
                     continue;
                 }
                 exact_cache_keys.insert(cache_key.to_string());
-                let default_note = default_value
-                    .map(|default| format!(" (file default {})", default))
-                    .unwrap_or_default();
-                exact_matches.push(format!(
-                    "{}={}{} @0x{:X}",
-                    rule.name,
-                    runtime_value_label(rule.value),
-                    default_note,
-                    addr
-                ));
+                exact_matches.push(format!("{}={}", rule.name, runtime_value_label(rule.value),));
             }
         }
 
@@ -4507,10 +4673,11 @@ mod windows_impl {
             if live_value == default_value {
                 continue;
             }
-            changed_cached_values.push(format!(
-                "{}={} (file default {}) @0x{:X}",
-                cache_key, live_value, default_value, addr
-            ));
+            let display_name = config_values
+                .get(cache_key)
+                .map(|(flag_name, _)| flag_name.as_str())
+                .unwrap_or(cache_key.as_str());
+            changed_cached_values.push(format!("{}={}", display_name, live_value));
         }
 
         let evidence_count = exact_matches.len() + changed_cached_values.len();
@@ -4527,20 +4694,14 @@ mod windows_impl {
             ScanVerdict::Flagged => "Critical live Roblox runtime-variable overrides",
             _ => "Suspicious live Roblox runtime-variable overrides",
         };
-        let mut detail_fields = vec![
-            format!("PID: {}", pid),
-            format!("Address cache: {}", cache_path.display()),
-            format!("Cache trust: {}", trust.label()),
-            format!("Address-backed live overrides: {}", evidence_count),
-            format!(
-                "Exact curated matches: {}",
-                render_config_detail_group(&exact_matches)
-            ),
-            format!(
-                "Uncurated changed cached values: {}",
-                render_config_detail_group(&changed_cached_values)
-            ),
-        ];
+        let mut live_flags = exact_matches;
+        live_flags.extend(changed_cached_values);
+        live_flags.sort_unstable();
+        live_flags.dedup();
+        let mut detail_fields = vec![format!(
+            "Detected flags: {}",
+            render_config_detail_group(&live_flags)
+        )];
         if !config_only_values.is_empty() {
             detail_fields.push(format!(
                 "Config-only values without live address proof: {}",
@@ -4928,14 +5089,10 @@ mod windows_impl {
                         rule.name,
                         runtime_value_label(rule.value)
                     ),
-                    Some(format!(
-                        "PID: {} | Registry node: 0x{:X} | Flag string: 0x{:X} | Registry entry: 0x{:X} | Value address: 0x{:X} | Node candidates: {} | Detection: resolved Roblox FastFlag node storage and read the live value storage used by memory injectors",
-                        pid,
-                        candidate.node_address,
-                        candidate.string_address,
-                        candidate.entry,
-                        value_ptr,
-                        node_entry_summary
+                    Some(detected_flag_detail(
+                        rule.name,
+                        &runtime_value_label(rule.value),
+                        "resolved Roblox FastFlag node storage and read the live value storage used by memory injectors",
                     )),
                 ));
                 emitted_exact_rule = true;
@@ -6214,6 +6371,47 @@ mod tests {
     }
 
     #[test]
+    fn serialized_public_noclip_variant_is_flagged() {
+        let b = bytes(
+            r#"fflags.json address.json {"DFFlagAssemblyExtentsExpansionStudHundredth":-50}"#,
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x6100, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Flagged)
+                    && f.description
+                        .contains("DFFlagAssemblyExtentsExpansionStudHundredth")
+                    && f.description.contains("= -50")
+            }),
+            "expected public noclip variant to be Flagged, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn public_xray_main_view_threshold_is_suspicious() {
+        let b = bytes(
+            r#"fflags.json address.json {"DFIntCullFactorPixelThresholdMainViewHighQuality":10000}"#,
+        );
+        let mut table = FlagHitTable::default();
+        scan_buffer(&b, 0x6200, &mut table);
+
+        let findings = findings_from_table(&table);
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description
+                        .contains("DFIntCullFactorPixelThresholdMainViewHighQuality")
+            }),
+            "expected public xray cull threshold to be Suspicious, got: {:?}",
+            findings
+        );
+    }
+
+    #[test]
     fn assignment_style_injector_value_is_parsed() {
         let b = bytes(r#"fflags.json address.json DFIntS2PhysicsSenderRate=1"#);
         let mut table = FlagHitTable::default();
@@ -6805,7 +7003,7 @@ mod tests {
             .details
             .as_deref()
             .unwrap_or_default()
-            .contains("Registry node: 0x1100"));
+            .contains("Detected flags: 1 total"));
     }
 
     #[test]
