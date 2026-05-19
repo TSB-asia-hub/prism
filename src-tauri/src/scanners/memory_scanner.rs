@@ -44,6 +44,12 @@ const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(90
 /// across chunk boundaries.
 const MAX_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
+/// Cap the parallel memory walk so Prism doesn't monopolize every logical CPU
+/// (and allocate one 16 MiB scratch buffer per rayon worker) while the UI is
+/// trying to stay responsive. Coverage is unchanged; this only reduces peak
+/// concurrency for the same region/chunk set.
+const MEMORY_SCAN_WORKER_LIMIT: usize = 4;
+
 /// Absolute per-region cap. Regions larger than this (>1 GiB) are only
 /// partially scanned (the first ABS_REGION_CAP bytes), with coverage
 /// accounting noting the truncation, to keep total scan time bounded.
@@ -3485,6 +3491,7 @@ fn findings_from_table(table: &FlagHitTable) -> Vec<ScanFinding> {
 mod windows_impl {
     use super::*;
     use rayon::prelude::*;
+    use rayon::ThreadPoolBuilder;
     use std::ffi::c_void;
     use std::mem;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -3522,6 +3529,13 @@ mod windows_impl {
         // Longest prefix is "DFString" / "SFString" at 8 chars.
         let max_name = 8 + MAX_IDENT_BODY_LEN;
         INJECTOR_CONTEXT_WINDOW_BYTES + (max_name * 2) + MAX_VALUE_CAPTURE_BYTES + 8
+    }
+
+    fn memory_scan_worker_count() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .clamp(1, MEMORY_SCAN_WORKER_LIMIT)
     }
 
     struct ReadCounters<'a> {
@@ -5706,39 +5720,48 @@ mod windows_impl {
         // ReadProcessMemory is documented as safe to call concurrently on
         // the same handle, and `ScopedHandle` only closes after this block.
         let handle_usize = handle.0 as usize;
-        let mut table = regions_to_scan
-            .par_iter()
-            .fold(
-                || {
-                    (
-                        FlagHitTable::default(),
-                        Vec::<u8>::with_capacity(MAX_CHUNK_BYTES),
-                    )
-                },
-                |(mut local, mut scratch), &(addr, size)| {
-                    if !timed_out.load(Ordering::Relaxed) {
-                        scan_region_into(
-                            &mut local,
-                            &mut scratch,
-                            handle_usize as HANDLE,
-                            addr,
-                            size,
-                            overlap,
-                            &bytes_scanned,
-                            &regions_scanned,
-                            &read_failures,
-                            &read_failed_bytes,
-                            &timed_out,
-                        );
-                    }
-                    (local, scratch)
-                },
-            )
-            .map(|(t, _)| t)
-            .reduce(FlagHitTable::default, |mut a, b| {
-                a.merge(b);
-                a
-            });
+        let scan_regions = || {
+            regions_to_scan
+                .par_iter()
+                .fold(
+                    || {
+                        (
+                            FlagHitTable::default(),
+                            Vec::<u8>::with_capacity(MAX_CHUNK_BYTES),
+                        )
+                    },
+                    |(mut local, mut scratch), &(addr, size)| {
+                        if !timed_out.load(Ordering::Relaxed) {
+                            scan_region_into(
+                                &mut local,
+                                &mut scratch,
+                                handle_usize as HANDLE,
+                                addr,
+                                size,
+                                overlap,
+                                &bytes_scanned,
+                                &regions_scanned,
+                                &read_failures,
+                                &read_failed_bytes,
+                                &timed_out,
+                            );
+                        }
+                        (local, scratch)
+                    },
+                )
+                .map(|(t, _)| t)
+                .reduce(FlagHitTable::default, |mut a, b| {
+                    a.merge(b);
+                    a
+                })
+        };
+        let mut table = match ThreadPoolBuilder::new()
+            .num_threads(memory_scan_worker_count())
+            .build()
+        {
+            Ok(pool) => pool.install(scan_regions),
+            Err(_) => scan_regions(),
+        };
 
         if scan_started.elapsed() >= MAX_SCAN_DURATION {
             timed_out.store(true, Ordering::Relaxed);
