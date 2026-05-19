@@ -134,6 +134,7 @@ function AppInner() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
   const scanInFlight = useRef(false);
+  const progressHeartbeatRef = useRef<Record<string, { at: number; bytesScanned: number }>>({});
 
   // Apply theme to the root element so global CSS variables can switch
   // via `:root[data-theme="light"]`. Persist to localStorage so the
@@ -171,14 +172,48 @@ function AppInner() {
     let unlistenProgress: UnlistenFn | null = null;
     let unlistenPartial: UnlistenFn | null = null;
     let cancelled = false;
+    progressHeartbeatRef.current = {};
     listen<ScanProgressEvent>("scan-progress", (event) => {
       const payload = event.payload;
+      if (payload.kind === "heartbeat") {
+        const last = progressHeartbeatRef.current[payload.scanner];
+        const now = Date.now();
+        const bytesDelta = Math.abs(payload.bytes_scanned - (last?.bytesScanned ?? 0));
+        if (last && now - last.at < 750 && bytesDelta < 32 * 1024 * 1024) return;
+        progressHeartbeatRef.current[payload.scanner] = {
+          at: now,
+          bytesScanned: payload.bytes_scanned,
+        };
+        setProgress((prev) => {
+          const current = prev[payload.scanner] ?? { state: "pending" };
+          if (current.state === "done" || current.state === "errored") return prev;
+          if (
+            current.state === "running" &&
+            current.regionsScanned === payload.regions_scanned &&
+            current.bytesScanned === payload.bytes_scanned
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [payload.scanner]: {
+              ...current,
+              state: "running",
+              regionsScanned: payload.regions_scanned,
+              bytesScanned: payload.bytes_scanned,
+            },
+          };
+        });
+        return;
+      }
       setProgress((prev) => {
         const current = prev[payload.scanner] ?? { state: "pending" };
         switch (payload.kind) {
           case "started":
+            if (current.state === "running") return prev;
             return { ...prev, [payload.scanner]: { ...current, state: "running" } };
           case "done":
+            if (current.state === "done" && current.findings === payload.findings) return prev;
             return {
               ...prev,
               [payload.scanner]: {
@@ -187,17 +222,8 @@ function AppInner() {
                 findings: payload.findings,
               },
             };
-          case "heartbeat":
-            return {
-              ...prev,
-              [payload.scanner]: {
-                ...current,
-                state: "running",
-                regionsScanned: payload.regions_scanned,
-                bytesScanned: payload.bytes_scanned,
-              },
-            };
           case "errored":
+            if (current.state === "errored" && current.errorMessage === payload.message) return prev;
             return {
               ...prev,
               [payload.scanner]: {
@@ -260,6 +286,7 @@ function AppInner() {
     setOpenKey(null);
     setFilter("all");
     setEvidenceFilter("all");
+    progressHeartbeatRef.current = {};
     setProgress(emptyProgress());
     try {
       const result = await invoke<ScanReport>("run_scan");
