@@ -201,6 +201,10 @@ function AppInner() {
               current.regionsScanned === payload.regions_scanned &&
               current.bytesScanned === payload.bytes_scanned
             ) {
+              progressHeartbeatRef.current[payload.scanner] = {
+                at: now,
+                bytesScanned: payload.bytes_scanned,
+              };
               return prev;
             }
             progressHeartbeatRef.current[payload.scanner] = {

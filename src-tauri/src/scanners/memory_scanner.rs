@@ -5720,7 +5720,24 @@ mod windows_impl {
         // ReadProcessMemory is documented as safe to call concurrently on
         // the same handle, and `ScopedHandle` only closes after this block.
         let handle_usize = handle.0 as usize;
-        let scan_regions = || {
+        let scan_region = |local: &mut FlagHitTable, scratch: &mut Vec<u8>, &(addr, size)| {
+            if !timed_out.load(Ordering::Relaxed) {
+                scan_region_into(
+                    local,
+                    scratch,
+                    handle_usize as HANDLE,
+                    addr,
+                    size,
+                    overlap,
+                    &bytes_scanned,
+                    &regions_scanned,
+                    &read_failures,
+                    &read_failed_bytes,
+                    &timed_out,
+                );
+            }
+        };
+        let scan_regions_parallel = || {
             regions_to_scan
                 .par_iter()
                 .fold(
@@ -5730,22 +5747,8 @@ mod windows_impl {
                             Vec::<u8>::with_capacity(MAX_CHUNK_BYTES),
                         )
                     },
-                    |(mut local, mut scratch), &(addr, size)| {
-                        if !timed_out.load(Ordering::Relaxed) {
-                            scan_region_into(
-                                &mut local,
-                                &mut scratch,
-                                handle_usize as HANDLE,
-                                addr,
-                                size,
-                                overlap,
-                                &bytes_scanned,
-                                &regions_scanned,
-                                &read_failures,
-                                &read_failed_bytes,
-                                &timed_out,
-                            );
-                        }
+                    |(mut local, mut scratch), region| {
+                        scan_region(&mut local, &mut scratch, region);
                         (local, scratch)
                     },
                 )
@@ -5755,12 +5758,20 @@ mod windows_impl {
                     a
                 })
         };
+        let scan_regions_sequential = || {
+            let mut table = FlagHitTable::default();
+            let mut scratch = Vec::<u8>::with_capacity(MAX_CHUNK_BYTES);
+            for region in &regions_to_scan {
+                scan_region(&mut table, &mut scratch, region);
+            }
+            table
+        };
         let mut table = match ThreadPoolBuilder::new()
             .num_threads(memory_scan_worker_count())
             .build()
         {
-            Ok(pool) => pool.install(scan_regions),
-            Err(_) => scan_regions(),
+            Ok(pool) => pool.install(scan_regions_parallel),
+            Err(_) => scan_regions_sequential(),
         };
 
         if scan_started.elapsed() >= MAX_SCAN_DURATION {
