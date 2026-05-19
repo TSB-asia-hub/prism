@@ -76,9 +76,12 @@ const FNV1A64_PRIME: u64 = 0x100000001b3;
 
 /// Per-singleton hard cap on the FFlag-shaped entries collected during the
 /// generic disk-default-deviation walk. The underlying bucket walk is already
-/// bounded by `RUNTIME_ENUM_MAX_NODES_PER_LAYOUT`, but a second upper bound on
-/// the materialised collection keeps result-size small on pathological builds.
-const GENERIC_FFLAG_ENTRY_CAP: usize = 16384;
+/// bounded by `RUNTIME_ENUM_MAX_NODES_PER_LAYOUT` (65,536 nodes per layout),
+/// and live Roblox tables contain ~20–30k FFlags total, so this cap needs to
+/// be at least as large as the underlying walk bound — otherwise entries in
+/// later buckets are silently skipped once the cap is hit (we observed
+/// `S2PhysicsSenderRate` being dropped this way at the previous 16384 cap).
+const GENERIC_FFLAG_ENTRY_CAP: usize = 65_536;
 
 /// Maximum number of deviating flag names included in the summary detail
 /// string. Keeps the report readable; the full count is reported separately.
@@ -4362,6 +4365,87 @@ mod windows_impl {
         out
     }
 
+    /// Relaxed counterpart to `read_remote_node_string` for the enumerative
+    /// walk in `collect_fflag_shaped_entries`. The strict reader rejects any
+    /// node whose `cap` field is larger than `MAX_IDENT_BODY_LEN + 32`,
+    /// because for short ident-shaped names a large cap is suspect — but in
+    /// the live FVar table Roblox's MSVC `std::string` allocator routinely
+    /// reports much larger capacities (the heap-grown buffer for a string
+    /// that was reallocated during construction, packed allocator metadata,
+    /// etc.) for entries the directed `remote_node_string_matches` lookup
+    /// can still resolve via the inline fallback. Removing the upper-bound
+    /// cap check is the difference between this reader visiting only
+    /// `read_remote_node_string`-friendly entries (a small minority of the
+    /// table) and visiting every entry the directed lookup can reach.
+    ///
+    /// Returns `None` only when the read genuinely fails or the recovered
+    /// bytes are not valid UTF-8.
+    fn read_remote_node_string_relaxed(
+        handle: HANDLE,
+        node: &[u8],
+        layout: NodeLayout,
+    ) -> Option<String> {
+        if node.len() < layout.entry_offset + 8 {
+            return None;
+        }
+        let len_end = layout.len_offset.checked_add(8)?;
+        let cap_end = layout.cap_offset.checked_add(8)?;
+        if len_end > node.len() || cap_end > node.len() {
+            return None;
+        }
+
+        let len =
+            u64::from_le_bytes(node[layout.len_offset..len_end].try_into().ok()?) as usize;
+        if len == 0 || len > MAX_IDENT_BODY_LEN + 16 {
+            return None;
+        }
+        let cap = u64::from_le_bytes(node[layout.cap_offset..cap_end].try_into().ok()?);
+
+        // Try the inline bytes first when the node has room for them. This
+        // is the inline-fallback equivalent of `remote_node_string_matches`'s
+        // tail comparison: even when cap claims a heap allocation, the
+        // node's inline slot frequently contains the canonical name bytes
+        // anyway, so we should prefer those.
+        let inline_end = layout.string_offset.checked_add(len)?;
+        if inline_end <= node.len() {
+            let bytes = &node[layout.string_offset..inline_end];
+            if bytes.iter().all(|&b| is_ident_byte(b))
+                && bytes[0].is_ascii_uppercase()
+            {
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+
+        // Heap-allocated path: dereference the string pointer at
+        // `string_offset` and read `len` bytes. We do NOT enforce the
+        // cap <= 160 upper bound here; the directed lookup doesn't either.
+        if cap > layout.inline_string_cap {
+            let ptr_end = layout.string_offset.checked_add(8)?;
+            if ptr_end > node.len() {
+                return None;
+            }
+            let ptr =
+                u64::from_le_bytes(node[layout.string_offset..ptr_end].try_into().ok()?) as usize;
+            if ptr == 0 {
+                return None;
+            }
+            let mut actual = vec![0u8; len];
+            if !read_process_exact(handle, ptr, &mut actual) {
+                return None;
+            }
+            return String::from_utf8(actual).ok();
+        }
+
+        // Inline path with a small cap and len that fits inline.
+        if len <= layout.inline_string_cap as usize && inline_end <= node.len() {
+            return String::from_utf8(node[layout.string_offset..inline_end].to_vec()).ok();
+        }
+
+        None
+    }
+
     /// Walks the live FastFlag hash table from `singleton` and returns every
     /// node whose name passes `is_fflag_shaped_name`. Mirrors the bucket-walk
     /// structure of `scan_runtime_registry_interesting_entries`, but accepts
@@ -4454,7 +4538,9 @@ mod windows_impl {
                             }
                             nodes_seen = nodes_seen.saturating_add(1);
 
-                            if let Some(name) = read_remote_node_string(handle, &node, layout) {
+                            if let Some(name) =
+                                read_remote_node_string_relaxed(handle, &node, layout)
+                            {
                                 if is_fflag_shaped_name(&name) && !seen_names.contains(&name) {
                                     let entry_end = layout.entry_offset + 8;
                                     if entry_end <= node.len() {
