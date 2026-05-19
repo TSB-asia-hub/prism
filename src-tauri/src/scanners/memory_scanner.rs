@@ -5695,7 +5695,7 @@ mod windows_impl {
             let interval = std::time::Duration::from_millis(400);
             loop {
                 std::thread::park_timeout(interval);
-                if hb_scan_started.elapsed() >= MAX_SCAN_DURATION {
+                if hb_scan_started.elapsed() >= MAX_SCAN_DURATION || hb_reporter.is_cancelled() {
                     hb_timeout.store(true, Ordering::Relaxed);
                     break;
                 }
@@ -5744,7 +5744,7 @@ mod windows_impl {
                     || {
                         (
                             FlagHitTable::default(),
-                            Vec::<u8>::with_capacity(MAX_CHUNK_BYTES),
+                            Vec::<u8>::new(),
                         )
                     },
                     |(mut local, mut scratch), region| {
@@ -5760,7 +5760,7 @@ mod windows_impl {
         };
         let scan_regions_sequential = || {
             let mut table = FlagHitTable::default();
-            let mut scratch = Vec::<u8>::with_capacity(MAX_CHUNK_BYTES);
+            let mut scratch = Vec::<u8>::new();
             for region in &regions_to_scan {
                 scan_region(&mut table, &mut scratch, region);
             }

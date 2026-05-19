@@ -175,6 +175,37 @@ function AppInner() {
     progressHeartbeatRef.current = {};
     listen<ScanProgressEvent>("scan-progress", (event) => {
       const payload = event.payload;
+      if (payload.kind === "heartbeat") {
+        const last = progressHeartbeatRef.current[payload.scanner];
+        const now = Date.now();
+        const bytesDelta = Math.abs(payload.bytes_scanned - (last?.bytesScanned ?? 0));
+        if (last && now - last.at < 750 && bytesDelta < 32 * 1024 * 1024) return;
+        progressHeartbeatRef.current[payload.scanner] = {
+          at: now,
+          bytesScanned: payload.bytes_scanned,
+        };
+        setProgress((prev) => {
+          const current = prev[payload.scanner] ?? { state: "pending" };
+          if (current.state === "done" || current.state === "errored") return prev;
+          if (
+            current.state === "running" &&
+            current.regionsScanned === payload.regions_scanned &&
+            current.bytesScanned === payload.bytes_scanned
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [payload.scanner]: {
+              ...current,
+              state: "running",
+              regionsScanned: payload.regions_scanned,
+              bytesScanned: payload.bytes_scanned,
+            },
+          };
+        });
+        return;
+      }
       setProgress((prev) => {
         const current = prev[payload.scanner] ?? { state: "pending" };
         switch (payload.kind) {
@@ -191,36 +222,6 @@ function AppInner() {
                 findings: payload.findings,
               },
             };
-          case "heartbeat": {
-            const last = progressHeartbeatRef.current[payload.scanner];
-            const now = Date.now();
-            const bytesDelta = Math.abs(payload.bytes_scanned - (last?.bytesScanned ?? 0));
-            if (last && now - last.at < 750 && bytesDelta < 32 * 1024 * 1024) return prev;
-            if (
-              current.state === "running" &&
-              current.regionsScanned === payload.regions_scanned &&
-              current.bytesScanned === payload.bytes_scanned
-            ) {
-              progressHeartbeatRef.current[payload.scanner] = {
-                at: now,
-                bytesScanned: payload.bytes_scanned,
-              };
-              return prev;
-            }
-            progressHeartbeatRef.current[payload.scanner] = {
-              at: now,
-              bytesScanned: payload.bytes_scanned,
-            };
-            return {
-              ...prev,
-              [payload.scanner]: {
-                ...current,
-                state: "running",
-                regionsScanned: payload.regions_scanned,
-                bytesScanned: payload.bytes_scanned,
-              },
-            };
-          }
           case "errored":
             if (current.state === "errored" && current.errorMessage === payload.message) return prev;
             return {
