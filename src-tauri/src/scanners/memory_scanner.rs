@@ -7,6 +7,7 @@ use crate::data::suspicious_flags::{
     get_flag_category, get_flag_description, get_flag_severity, CRITICAL_FLAGS, HIGH_FLAGS,
     MEDIUM_FLAGS,
 };
+use crate::data::tracker_baselines::{tracker_baseline_for_name, TrackerValue};
 use crate::models::{ScanFinding, ScanVerdict};
 use crate::scanners::progress::ScanProgress;
 use std::collections::{HashMap, HashSet};
@@ -4746,6 +4747,55 @@ mod windows_impl {
                             curated_findings.push(finding);
                         }
                     }
+                    // A curated baseline took the decision; the tracker
+                    // path is the broader fallback, not a duplicate emitter.
+                    continue;
+                }
+
+                // Tracker-baseline path (broad coverage, Suspicious only).
+                //
+                // Roblox-side tracker baselines come from MaximumADHD's
+                // public application-settings snapshot. Capped at Suspicious
+                // because the bundle goes stale as Roblox A/B-rolls flag
+                // values — what looks like a deviation may simply be a
+                // newer rollout the bundle hasn't caught yet. Operators
+                // review tracker-derived findings; the curated paths above
+                // remain the source of trustworthy Flagged verdicts.
+                if classification.is_allowlisted
+                    || classification.is_roblox_runtime_overridden
+                {
+                    continue;
+                }
+                if let Some(tracker_value) =
+                    tracker_baseline_for_name(&classification.display_name)
+                {
+                    if tracker_value.matches_live_i32(raw_value) {
+                        continue;
+                    }
+                    if !curated_emitted.insert(classification.display_name.clone()) {
+                        continue;
+                    }
+                    let observed_i32 = i32::from_le_bytes(raw_value);
+                    let observed_render = match tracker_value {
+                        TrackerValue::Bool(_) => {
+                            if raw_value[0] != 0 { "true".to_string() } else { "false".to_string() }
+                        }
+                        TrackerValue::Int(_) => observed_i32.to_string(),
+                    };
+                    curated_findings.push(ScanFinding::new(
+                        "memory_scanner",
+                        ScanVerdict::Suspicious,
+                        format!(
+                            "Suspicious live FastFlag deviates from public tracker: \"{}\" = {} (tracker vanilla: {})",
+                            classification.display_name,
+                            observed_render,
+                            tracker_value.render(),
+                        ),
+                        Some(format!(
+                            "PID: {} | Source: MaximumADHD/Roblox-FFlag-Tracker public application-settings snapshot. The live value at entry+0xC0 for this FVar differs from Roblox's publicly rolled-out value at the time the bundle was refreshed. Capped at Suspicious because the bundle is a snapshot — Roblox routinely A/B-rolls public flag values and a fresh rollout would also produce this signal. Operators should weigh this together with other findings before action.",
+                            pid,
+                        )),
+                    ));
                 }
             }
         }
@@ -4757,16 +4807,13 @@ mod windows_impl {
         // No curated entry triggered a finding. Emit a Clean diagnostic so
         // operators see that the bare-key bucket walk ran and how many
         // entries it inspected. A non-zero inspected count with no curated
-        // emit is a genuine clean baseline — non-curated deviations from
-        // PE `.data` are routine on every live client (Roblox runtime
-        // bootstrap sets many flags away from their `.data` value) and are
-        // not actionable detection signal.
+        // or tracker emit is a genuine clean baseline.
         vec![ScanFinding::new(
             "memory_scanner",
             ScanVerdict::Clean,
-            "Bare-key singleton FFlag check completed; no curated cheat-rule or baseline-deviation hits",
+            "Bare-key singleton FFlag check completed; no curated cheat-rule, baseline, or public-tracker deviation hits",
             Some(format!(
-                "PID: {} | Singleton candidates: {} | FFlag-shaped entries walked: {} | Entries inspected (live read OK): {} | This path emits findings only when a walked entry matches a curated RUNTIME_OVERRIDE_RULES cheat value or deviates from a curated RUNTIME_FLAG_BASELINES vanilla value. Non-curated deviations from PE .data are intentionally suppressed because every clean Roblox client shows them.",
+                "PID: {} | Singleton candidates: {} | FFlag-shaped entries walked: {} | Entries inspected (live read OK): {} | This path emits findings when a walked entry (a) matches a curated RUNTIME_OVERRIDE_RULES cheat value, (b) deviates from a curated RUNTIME_FLAG_BASELINES vanilla value, or (c) deviates from MaximumADHD/Roblox-FFlag-Tracker's public application-settings snapshot. Non-curated deviations from PE .data are intentionally suppressed.",
                 pid,
                 candidates.len(),
                 total_collected,
