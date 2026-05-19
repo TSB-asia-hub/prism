@@ -158,85 +158,52 @@ Important memory scanner helpers and concepts:
 - `RuntimeRegistryCandidate`: candidate live FastFlag registry singleton/table.
 - `lookup_runtime_flag_entry`: directed lookup using hash + bucket walk.
 - `scan_runtime_registry_interesting_entries`: fallback bucket enumeration for known/probe/baseline flags.
-- `collect_fflag_shaped_entries`: bucket enumeration that yields *any* FFlag-shaped node, not just the curated set. Feeds the generic singleton-injection detection.
-- `inspect_generic_singleton_overrides` + `aggregate_generic_singleton_finding`: build-agnostic detection that flags any singleton-walking FFlag injector by comparing live `entry+0xC0` values against the Roblox executable's shipped defaults at the same RVA. Filters out the official Roblox allowlist and `MEMORY_BASELINE_FLAGS`. Verdict: any non-allowlisted CRITICAL deviation OR ≥3 non-allowlisted deviations → Flagged; 1–2 non-critical → Suspicious.
+- `collect_fflag_shaped_entries`: bucket enumeration that yields any FFlag-shaped node (bare or prefixed). Feeds the bare-key singleton-injection bridge.
+- `inspect_generic_singleton_overrides`: bare-key bridge for the curated cheat-rule and curated-baseline detection paths. Walks the FVar table directly, classifies each bare-key entry back to its developer-facing form, and emits the curated `RUNTIME_OVERRIDE_RULES` / `runtime_flag_baseline_finding` findings for entries the legacy hash lookup misses. Emits a Clean diagnostic when no curated entry triggers a finding.
 - `RUNTIME_VALUE_PTR_OFFSET`: entry field offset to the actual value pointer, currently `0xC0`.
 - `NodeLayout`: candidate hash-node layouts for Roblox/STL changes.
 - Anchor/pointer discovery paths are diagnostic/fallback scaffolding and can be noisy.
 
-## Generic Singleton-Injection Detection
+## Bare-key Singleton-Injection Bridge
 
-The detection invariant exploited by `inspect_generic_singleton_overrides`:
-**every singleton FFlag injector writes to the 4-byte storage slot reached via
-`entry+0xC0`** after walking the FastFlag hash table. The vanilla state of
-that slot is whatever the Roblox PE shipped in its `.data` section at the
-same RVA. Whoever did the write — TSBAH, MxStrap, LornoFix, a future tool —
-leaves the same fingerprint: the live i32 diverges from the on-disk default.
+`inspect_generic_singleton_overrides` exists for one reason: the legacy
+curated paths in `inspect_runtime_fflag_registry` call
+`lookup_runtime_flag_entry` with the developer-facing prefixed flag name
+(`DFIntS2PhysicsSenderRate`) and FNV-1a-hash that into a bucket, but Roblox
+keys the live FVar registry by the BARE name (`S2PhysicsSenderRate`). The
+legacy hash lookup misses every prefixed flag. This bridge walks the FVar
+table directly, classifies each bare-key entry back to its developer-facing
+form via `classify_runtime_key`, and emits the same curated findings the
+legacy path would have produced.
 
-The new path runs alongside the curated `RUNTIME_OVERRIDE_RULES` /
-`RUNTIME_FLAG_BASELINES` paths inside the singleton-resolution loop. For each
-discovered singleton candidate, it walks the bucket chain, collects every
-node whose name matches `is_fflag_shaped_name` (any `FLAG_PREFIXES` prefix +
-a valid identifier body), reads the live value, and compares against
-`PeImageDefaults::read_i32_at_rva`. Deviations on flags in the official
-allowlist (`is_allowed_flag`) or on `MEMORY_BASELINE_FLAGS` (names Roblox
-itself overwrites at runtime via telemetry / A-B rollout) are suppressed.
-Remaining deviations roll into one summary `ScanFinding` via the pure-fn
-`aggregate_generic_singleton_finding` aggregator (unit-tested without a live
-handle).
+What this path emits:
+- **Critical / Suspicious "Live FastFlag registry override"** when a walked
+  entry matches a `RUNTIME_OVERRIDE_RULES` exact cheat value.
+- **Baseline-deviation finding** (via `runtime_flag_baseline_finding`) when
+  a walked entry has a `RUNTIME_FLAG_BASELINES` curated vanilla value and
+  the live value differs.
+- **Clean diagnostic** when the walk completed but no curated entry
+  produced a finding — so operators see the path ran.
 
-Why this matters: the curated lists in `RUNTIME_OVERRIDE_RULES` and
-`RUNTIME_FLAG_BASELINES` cover ~30 flag names total. Singleton injectors
-routinely write to flags outside both lists (e.g. the modern RakNet /
-RenderConfig set: `DFIntRakNetPingFrequencyMillisecond`,
-`DFIntRakNetLoopMs`, `DFIntMaxDataPacketPerSend`, …). The generic path
-catches those without curating each one individually. Curation discipline
-still matters for the curated paths — they produce specific, named findings
-with per-flag severity context — but the generic path is the safety net.
+What this path deliberately does NOT do:
+- Compare live values against the PE `.data` initializer for non-curated
+  flags. Roblox runtime bootstrap code sets hundreds of flags away from
+  their `.data` defaults on every clean client (telemetry rollout flags,
+  A/B experiments, IXP layers, internal token hashes, etc.). A
+  `.data`-based deviation count is permanently non-zero in vanilla state
+  and is not a usable detection signal — flagging a vanilla client as
+  Suspicious would defeat the tournament-integrity use case. **Vanilla
+  Roblox should produce zero findings from this path.** The way to extend
+  detection coverage is to grow the curated lists, not to relax this rule.
 
 ### Key correctness rules
 
 - **Roblox stores BARE names in the FVar registry**, not the developer-facing
   full identifier. `S2PhysicsSenderRate`, not `DFIntS2PhysicsSenderRate`. The
-  prism helper `classify_runtime_key` bridges this by trying each
-  `FLAG_PREFIXES` entry concatenated with the bare key against every curated
-  list. `is_fflag_shaped_name` accepts identifier-shaped names *without*
-  requiring a prefix — filtering by prefix would reject almost every real
-  flag.
-- **Non-critical deviations cap at Suspicious**, mirroring the trust-model
-  rule for the heap string-scan path. Roblox itself overwrites a long tail
-  of telemetry / A-B rollout flags on every live client, and the disk
-  image's `.data` defaults are the *initial* zero-state rather than the
-  post-bootstrap state. Counting "many non-critical deviations" as Flagged
-  would mis-flag every vanilla client. Critical-list deviations
-  (`suspicious_flags::CRITICAL_FLAGS` matched via the prefixed-name lookup)
-  remain the only path to a Flagged verdict from this detection.
-- **Magnitude filter** (`deviation_within_int_magnitude`,
-  `GENERIC_SINGLETON_VALUE_MAGNITUDE_CAP = 50_000_000`) suppresses
-  type-confused reads. FVar value cells are uniformly 4 bytes but store
-  different concrete types — bool, i32, f32, or the first 4 bytes of an
-  8-byte std::string head. Reading 4 bytes as i32 from a string-pointer
-  cell produces values in heap-pointer ranges (often >100M, often
-  >1G); from a float cell it produces float bit-patterns that look like
-  random large integers. Both halves of the comparison must fit in the
-  magnitude window before the deviation is counted.
-- **The curated `MEMORY_BASELINE_FLAGS` list is known incomplete.** A live
-  Roblox client routinely shows ~500–700 non-critical deviations from
-  `.data` defaults via the generic path — most are Roblox-internal flags
-  that should eventually be added to `MEMORY_BASELINE_FLAGS`. Until that
-  list expands, treat the per-flag deviation listing as triage material,
-  not as a list of injections.
-- **Generic-path verdict is capped at Suspicious; Flagged comes from the
-  curated paths.** The generic path emits curated-style Critical findings
-  for flags whose name matches `RUNTIME_OVERRIDE_RULES` exact cheat values
-  — this is the bare-key bridge: the legacy
-  `inspect_runtime_fflag_registry` curated path FNV-1a-hashes the
-  developer-facing prefixed name (`DFIntS2PhysicsSenderRate`), but Roblox
-  keys the FVar table by the bare form (`S2PhysicsSenderRate`), so the
-  legacy hash lookup misses every prefixed flag. The bare-key bucket walk
-  in `collect_fflag_shaped_entries` resolves the entry, and
-  `inspect_generic_singleton_overrides` then emits the curated Critical
-  finding directly for the matched flag.
+  helper `classify_runtime_key` bridges this by trying each `FLAG_PREFIXES`
+  entry concatenated with the bare key against every curated list.
+  `is_fflag_shaped_name` accepts identifier-shaped names *without* requiring
+  a prefix — filtering by prefix would reject almost every real flag.
 - **Bucket-walk coverage requires the right cap.** Live Roblox tables hold
   20k–30k FFlags; `GENERIC_FFLAG_ENTRY_CAP` is set to 65,536 so the walk
   doesn't break out of its outer layout loop before reaching the late
