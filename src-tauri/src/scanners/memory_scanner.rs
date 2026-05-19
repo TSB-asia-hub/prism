@@ -7,6 +7,7 @@ use crate::data::suspicious_flags::{
     get_flag_category, get_flag_description, get_flag_severity, CRITICAL_FLAGS, HIGH_FLAGS,
     MEDIUM_FLAGS,
 };
+#[cfg(all(target_os = "windows", target_pointer_width = "64"))]
 use crate::data::tracker_baselines::{tracker_baseline_for_name, TrackerValue};
 use crate::models::{ScanFinding, ScanVerdict};
 use crate::scanners::progress::ScanProgress;
@@ -1935,6 +1936,18 @@ fn detected_flag_detail(name: &str, value: &str, detection: &str) -> String {
     )
 }
 
+fn detected_flag_detail_group(flags: &[String], detection: &str) -> String {
+    let mut out = format!("Detected flags: {} total", flags.len());
+    for flag in flags {
+        out.push('\n');
+        out.push_str("- ");
+        out.push_str(flag);
+    }
+    out.push_str(" | Detection: ");
+    out.push_str(detection);
+    out
+}
+
 fn detected_flag_detail_with_default(
     name: &str,
     value: &str,
@@ -1952,6 +1965,21 @@ fn runtime_value_from_raw(raw_value: [u8; 4], shape: RuntimeFlagValue) -> Runtim
     match shape {
         RuntimeFlagValue::Bool(_) => RuntimeFlagValue::Bool(observed_int != 0),
         RuntimeFlagValue::Int(_) => RuntimeFlagValue::Int(observed_int),
+    }
+}
+
+fn verdict_rank(verdict: &ScanVerdict) -> u8 {
+    match verdict {
+        ScanVerdict::Clean => 0,
+        ScanVerdict::Inconclusive => 1,
+        ScanVerdict::Suspicious => 2,
+        ScanVerdict::Flagged => 3,
+    }
+}
+
+fn max_verdict(current: &mut ScanVerdict, candidate: ScanVerdict) {
+    if verdict_rank(&candidate) > verdict_rank(current) {
+        *current = candidate;
     }
 }
 
@@ -3704,7 +3732,6 @@ mod windows_impl {
     const RUNTIME_ENUM_MAX_NODES_PER_LAYOUT: usize = 65_536;
     const RUNTIME_ENUM_BUCKET_CHUNK: usize = 4096;
     const RUNTIME_DEBUG_MAX_ITEMS: usize = 16;
-    const RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES: usize = 3;
     const RUNTIME_PATTERN_SCAN_CHUNK: usize = 1024 * 1024;
     const RUNTIME_PATTERN_SCAN_CAP: usize = 256 * 1024 * 1024;
     const RUNTIME_REGISTRY_PROBE_NAMES: &[&str] = &[
@@ -4662,6 +4689,9 @@ mod windows_impl {
         let mut seen_name_ptr: HashSet<(String, usize)> = HashSet::new();
         let mut curated_findings: Vec<ScanFinding> = Vec::new();
         let mut curated_emitted: HashSet<String> = HashSet::new();
+        let mut exact_flags = Vec::new();
+        let mut exact_seen = HashSet::new();
+        let mut exact_verdict = ScanVerdict::Clean;
 
         for candidate in candidates {
             let entries =
@@ -4701,28 +4731,11 @@ mod windows_impl {
                         continue;
                     }
                     let verdict = get_flag_severity(rule.name);
-                    let label = match verdict {
-                        ScanVerdict::Flagged => "Critical live FastFlag registry override",
-                        ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
-                        ScanVerdict::Clean | ScanVerdict::Inconclusive => {
-                            "Live FastFlag registry override"
-                        }
-                    };
-                    curated_findings.push(ScanFinding::new(
-                        "memory_scanner",
-                        verdict,
-                        format!(
-                            "{}: \"{}\" = {}",
-                            label,
-                            rule.name,
-                            runtime_value_label(rule.value)
-                        ),
-                        Some(detected_flag_detail(
-                            rule.name,
-                            &runtime_value_label(rule.value),
-                            "resolved Roblox FastFlag hash table via bare-key bucket walk and read the live value storage used by memory injectors",
-                        )),
-                    ));
+                    max_verdict(&mut exact_verdict, verdict);
+                    let flag = format!("{}={}", rule.name, runtime_value_label(rule.value));
+                    if exact_seen.insert(flag.clone()) {
+                        exact_flags.push(flag);
+                    }
                 }
 
                 // Curated baseline deviation: live value differs from the
@@ -4798,6 +4811,26 @@ mod windows_impl {
                     ));
                 }
             }
+        }
+
+        if !exact_flags.is_empty() {
+            exact_flags.sort_unstable();
+            let description = match exact_verdict {
+                ScanVerdict::Flagged => "Critical live FastFlag registry overrides",
+                ScanVerdict::Suspicious => "Suspicious live FastFlag registry overrides",
+                ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                    "Live FastFlag registry overrides"
+                }
+            };
+            curated_findings.push(ScanFinding::new(
+                "memory_scanner",
+                exact_verdict.clone(),
+                description,
+                Some(detected_flag_detail_group(
+                    &exact_flags,
+                    "resolved Roblox FastFlag hash table via bare-key bucket walk and read the live value storage used by memory injectors",
+                )),
+            ));
         }
 
         if !curated_findings.is_empty() {
@@ -4893,6 +4926,9 @@ mod windows_impl {
         let mut enumerated_summaries = Vec::new();
         let mut resolved_values = Vec::new();
         let mut resolved_seen = HashSet::new();
+        let mut exact_flags = Vec::new();
+        let mut exact_seen = HashSet::new();
+        let mut exact_verdict = ScanVerdict::Clean;
         for candidate in candidates {
             let enumerated_entries =
                 scan_runtime_registry_interesting_entries(handle, candidate.singleton);
@@ -4947,28 +4983,11 @@ mod windows_impl {
                 }
 
                 let verdict = get_flag_severity(rule.name);
-                let label = match verdict {
-                    ScanVerdict::Flagged => "Critical live FastFlag registry override",
-                    ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
-                    ScanVerdict::Clean | ScanVerdict::Inconclusive => {
-                        "Live FastFlag registry override"
-                    }
-                };
-                findings.push(ScanFinding::new(
-                    "memory_scanner",
-                    verdict,
-                    format!(
-                        "{}: \"{}\" = {}",
-                        label,
-                        rule.name,
-                        runtime_value_label(rule.value)
-                    ),
-                    Some(detected_flag_detail(
-                        rule.name,
-                        &runtime_value_label(rule.value),
-                        "resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
-                    )),
-                ));
+                max_verdict(&mut exact_verdict, verdict);
+                let flag = format!("{}={}", rule.name, runtime_value_label(rule.value));
+                if exact_seen.insert(flag.clone()) {
+                    exact_flags.push(flag);
+                }
             }
             findings.extend(inspect_runtime_flag_baselines_for_candidate(
                 handle,
@@ -4977,6 +4996,26 @@ mod windows_impl {
                 &enumerated_entries,
                 &mut resolved_values,
                 &mut resolved_seen,
+            ));
+        }
+
+        if !exact_flags.is_empty() {
+            exact_flags.sort_unstable();
+            let description = match exact_verdict {
+                ScanVerdict::Flagged => "Critical live FastFlag registry overrides",
+                ScanVerdict::Suspicious => "Suspicious live FastFlag registry overrides",
+                ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                    "Live FastFlag registry overrides"
+                }
+            };
+            findings.push(ScanFinding::new(
+                "memory_scanner",
+                exact_verdict.clone(),
+                description,
+                Some(detected_flag_detail_group(
+                    &exact_flags,
+                    "resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                )),
             ));
         }
 
@@ -5073,366 +5112,6 @@ mod windows_impl {
         }
 
         findings
-    }
-
-    #[derive(Clone, Copy)]
-    enum RenderConfigCacheTrust {
-        CurrentPid,
-        StaleValidated,
-    }
-
-    impl RenderConfigCacheTrust {
-        fn label(self) -> &'static str {
-            match self {
-                Self::CurrentPid => "current Roblox PID",
-                Self::StaleValidated => "stale cache validated against current Roblox memory",
-            }
-        }
-
-        fn counts_without_default_diff(self) -> bool {
-            matches!(self, Self::CurrentPid)
-        }
-    }
-
-    fn render_config_dir() -> Option<std::path::PathBuf> {
-        std::env::var_os("APPDATA").map(|appdata| {
-            std::path::PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("RenderConfig")
-        })
-    }
-
-    /// The current MxStrap UI writes a per-PID address cache under a disguised
-    /// RenderConfig folder. Treat that file only as a map: the finding is
-    /// emitted from live Roblox memory reads at the cached addresses.
-    fn render_config_cache_path(pid: u32) -> Option<std::path::PathBuf> {
-        Some(render_config_dir()?.join(format!("flags_{}.json", pid)))
-    }
-
-    fn render_config_cache_candidates(
-        pid: u32,
-    ) -> Vec<(std::path::PathBuf, RenderConfigCacheTrust)> {
-        let mut out = Vec::new();
-        let current = render_config_cache_path(pid);
-        if let Some(path) = current.as_ref() {
-            out.push((path.clone(), RenderConfigCacheTrust::CurrentPid));
-        }
-
-        let Some(dir) = render_config_dir() else {
-            return out;
-        };
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return out;
-        };
-        let mut stale: Vec<_> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
-                if !file_name.starts_with("flags_") || !file_name.ends_with(".json") {
-                    return None;
-                }
-                if current.as_ref().is_some_and(|current| current == &path) {
-                    return None;
-                }
-                let modified = entry.metadata().ok()?.modified().ok()?;
-                Some((path, modified))
-            })
-            .collect();
-        stale.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
-        out.extend(
-            stale
-                .into_iter()
-                .take(8)
-                .map(|(path, _)| (path, RenderConfigCacheTrust::StaleValidated)),
-        );
-        out
-    }
-
-    fn render_config_plain_config_path() -> Option<std::path::PathBuf> {
-        Some(render_config_dir()?.join("render_cfg.dat"))
-    }
-
-    fn render_config_cache_key(flag_name: &str) -> &str {
-        for prefix in [
-            "DFFlag", "FFlag", "DFInt", "FInt", "DFString", "FString", "SFFlag", "SFInt",
-            "SFString", "DFLog", "FLog",
-        ] {
-            if let Some(stripped) = flag_name.strip_prefix(prefix) {
-                return stripped;
-            }
-        }
-        flag_name
-    }
-
-    fn render_config_json_value_label(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::String(s) => format!("\"{}\"", s),
-            _ => value.to_string(),
-        }
-    }
-
-    fn render_config_config_values_by_cache_key() -> HashMap<String, (String, String)> {
-        let Some(config_path) = render_config_plain_config_path() else {
-            return HashMap::new();
-        };
-        let Ok(content) = std::fs::read_to_string(config_path) else {
-            return HashMap::new();
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-            return HashMap::new();
-        };
-        let Some(config_obj) = parsed.as_object() else {
-            return HashMap::new();
-        };
-
-        let mut out = HashMap::new();
-        for (flag_name, value) in config_obj {
-            out.insert(
-                render_config_cache_key(flag_name).to_string(),
-                (flag_name.to_string(), render_config_json_value_label(value)),
-            );
-        }
-        out
-    }
-
-    fn render_config_config_only_values(
-        cache_obj: &serde_json::Map<String, serde_json::Value>,
-        config_values: &HashMap<String, (String, String)>,
-    ) -> Vec<String> {
-        let mut out = Vec::new();
-        for (cache_key, (flag_name, value)) in config_values {
-            if cache_obj.contains_key(cache_key) {
-                continue;
-            }
-            out.push(format!("{}={}", flag_name, value));
-        }
-        out.sort_unstable();
-        out
-    }
-
-    fn render_config_detail_group(items: &[String]) -> String {
-        if items.is_empty() {
-            return "0".to_string();
-        }
-        let mut out = format!("{} total", items.len());
-        for item in items {
-            out.push('\n');
-            out.push_str("- ");
-            out.push_str(item);
-        }
-        out
-    }
-
-    pub(super) fn render_config_cache_finding_from_matches(
-        mut exact_matches: Vec<String>,
-        config_only_values: Vec<String>,
-    ) -> Option<ScanFinding> {
-        let evidence_count = exact_matches.len();
-        if evidence_count == 0 {
-            return None;
-        }
-
-        let verdict = if evidence_count >= RENDER_CONFIG_RUNTIME_FLAGGED_MATCHES {
-            ScanVerdict::Flagged
-        } else {
-            ScanVerdict::Suspicious
-        };
-        let description = match verdict {
-            ScanVerdict::Flagged => "Critical live Roblox runtime-variable overrides",
-            _ => "Suspicious live Roblox runtime-variable overrides",
-        };
-        exact_matches.sort_unstable();
-        exact_matches.dedup();
-        let mut detail_fields = vec![format!(
-            "Detected flags: {}",
-            render_config_detail_group(&exact_matches)
-        )];
-        if !config_only_values.is_empty() {
-            detail_fields.push(format!(
-                "Config-only values without live address proof: {}",
-                render_config_detail_group(&config_only_values)
-            ));
-        }
-        detail_fields.push(
-            "Detection: read cached live Roblox variable addresses and confirmed exact curated cheat values in live memory; ordinary cached engine values are not treated as injected overrides".to_string(),
-        );
-
-        Some(ScanFinding::new(
-            "memory_scanner",
-            verdict,
-            description,
-            Some(detail_fields.join(" | ")),
-        ))
-    }
-
-    struct PeSectionMap {
-        virtual_address: usize,
-        virtual_size: usize,
-        raw_ptr: usize,
-        raw_size: usize,
-    }
-
-    struct PeImageDefaults {
-        bytes: Vec<u8>,
-        sections: Vec<PeSectionMap>,
-    }
-
-    fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
-        let end = offset.checked_add(2)?;
-        let slice = bytes.get(offset..end)?;
-        Some(u16::from_le_bytes(slice.try_into().ok()?))
-    }
-
-    fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
-        let end = offset.checked_add(4)?;
-        let slice = bytes.get(offset..end)?;
-        Some(u32::from_le_bytes(slice.try_into().ok()?))
-    }
-
-    impl PeImageDefaults {
-        fn load(path: Option<&str>) -> Option<Self> {
-            let path = path?;
-            let bytes = std::fs::read(path).ok()?;
-            if bytes.get(0..2)? != b"MZ" {
-                return None;
-            }
-            let pe_offset = read_u32_le(&bytes, 0x3C)? as usize;
-            if bytes.get(pe_offset..pe_offset.checked_add(4)?)? != b"PE\0\0" {
-                return None;
-            }
-            let coff = pe_offset.checked_add(4)?;
-            let section_count = read_u16_le(&bytes, coff.checked_add(2)?)? as usize;
-            let optional_header_size = read_u16_le(&bytes, coff.checked_add(16)?)? as usize;
-            let section_table = coff.checked_add(20)?.checked_add(optional_header_size)?;
-
-            let mut sections = Vec::new();
-            for index in 0..section_count.min(128) {
-                let section = section_table.checked_add(index.checked_mul(40)?)?;
-                let virtual_size = read_u32_le(&bytes, section.checked_add(8)?)? as usize;
-                let virtual_address = read_u32_le(&bytes, section.checked_add(12)?)? as usize;
-                let raw_size = read_u32_le(&bytes, section.checked_add(16)?)? as usize;
-                let raw_ptr = read_u32_le(&bytes, section.checked_add(20)?)? as usize;
-                if virtual_address == 0 || raw_size == 0 {
-                    continue;
-                }
-                sections.push(PeSectionMap {
-                    virtual_address,
-                    virtual_size,
-                    raw_ptr,
-                    raw_size,
-                });
-            }
-            (!sections.is_empty()).then_some(Self { bytes, sections })
-        }
-
-        fn read_i32_at_rva(&self, rva: usize) -> Option<i32> {
-            for section in &self.sections {
-                let mapped_size = section.virtual_size.max(section.raw_size);
-                let section_end = section.virtual_address.checked_add(mapped_size)?;
-                if rva < section.virtual_address || rva.checked_add(4)? > section_end {
-                    continue;
-                }
-                let delta = rva.checked_sub(section.virtual_address)?;
-                if delta.checked_add(4)? > section.raw_size {
-                    return None;
-                }
-                let file_offset = section.raw_ptr.checked_add(delta)?;
-                let bytes = self.bytes.get(file_offset..file_offset.checked_add(4)?)?;
-                return Some(i32::from_le_bytes(bytes.try_into().ok()?));
-            }
-            None
-        }
-    }
-
-    fn module_file_default_for_addr(
-        addr: usize,
-        main_module: Option<(usize, usize)>,
-        image_defaults: Option<&PeImageDefaults>,
-    ) -> Option<i32> {
-        let (module_base, module_size) = main_module?;
-        let defaults = image_defaults?;
-        let module_end = module_base.checked_add(module_size)?;
-        let value_end = addr.checked_add(4)?;
-        if addr < module_base || value_end > module_end {
-            return None;
-        }
-        defaults.read_i32_at_rva(addr.checked_sub(module_base)?)
-    }
-
-    fn inspect_render_config_cache(
-        handle: HANDLE,
-        _pid: u32,
-        exe_path: Option<&str>,
-        cache_path: std::path::PathBuf,
-        trust: RenderConfigCacheTrust,
-    ) -> Option<ScanFinding> {
-        let Ok(content) = std::fs::read_to_string(&cache_path) else {
-            return None;
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-            return None;
-        };
-        let Some(obj) = parsed.as_object() else {
-            return None;
-        };
-
-        let config_values = render_config_config_values_by_cache_key();
-        let config_only_values = render_config_config_only_values(obj, &config_values);
-        let image_defaults = PeImageDefaults::load(exe_path);
-        let main_module = main_module_info_windows(handle);
-        let mut exact_matches = Vec::new();
-        let mut seen = HashSet::new();
-        for &rule in RUNTIME_OVERRIDE_RULES {
-            let cache_key = render_config_cache_key(rule.name);
-            let Some(addr) = obj
-                .get(cache_key)
-                .and_then(|value| value.as_u64())
-                .and_then(|value| usize::try_from(value).ok())
-            else {
-                continue;
-            };
-            if addr == 0 || !seen.insert((rule.name, addr)) {
-                continue;
-            }
-            let Some(raw_value) = read_process_i32_bytes(handle, addr) else {
-                continue;
-            };
-            if runtime_rule_matches_observed(rule, raw_value) {
-                let live_value = i32::from_le_bytes(raw_value);
-                let default_value =
-                    module_file_default_for_addr(addr, main_module, image_defaults.as_ref());
-                if default_value.is_some_and(|default| default == live_value)
-                    || (!trust.counts_without_default_diff() && default_value.is_none())
-                {
-                    continue;
-                }
-                exact_matches.push(format!("{}={}", rule.name, runtime_value_label(rule.value),));
-            }
-        }
-
-        // Do not promote arbitrary cached-address values just because they
-        // differ from bytes in the Roblox executable image. DynamicVariables
-        // are legitimately rewritten by Roblox's own runtime/config refresh,
-        // and the RenderConfig cache often contains ordinary engine values
-        // such as UGC validation limits. Cache-address evidence is high
-        // confidence only when the live value matches a curated cheat value.
-        render_config_cache_finding_from_matches(exact_matches, config_only_values)
-    }
-
-    fn inspect_render_config_runtime_overrides(
-        handle: HANDLE,
-        pid: u32,
-        exe_path: Option<&str>,
-    ) -> Vec<ScanFinding> {
-        for (cache_path, trust) in render_config_cache_candidates(pid) {
-            if let Some(finding) =
-                inspect_render_config_cache(handle, pid, exe_path, cache_path, trust)
-            {
-                return vec![finding];
-            }
-        }
-        Vec::new()
     }
 
     /// Read a 4-byte flag value via the node-pointer-chain:
@@ -6153,8 +5832,6 @@ mod windows_impl {
             .map(|v| v.len())
             .sum();
         let main_module_info = main_module_info_windows(handle.0);
-        let render_config_findings =
-            inspect_render_config_runtime_overrides(handle.0, pid, proc.exe_path.as_deref());
         let main_module_desc = main_module_info
             .map(|(b, s)| format!("base=0x{:X} size=0x{:X}", b, s))
             .unwrap_or_else(|| "(none)".to_string());
@@ -6283,7 +5960,6 @@ mod windows_impl {
             .chain(generic_singleton_findings)
             .chain(node_findings)
             .chain(anchor_findings)
-            .chain(render_config_findings)
         {
             if matches!(
                 finding.verdict,
@@ -6773,44 +6449,6 @@ mod tests {
 
         assert_eq!(coverage.gap_bytes(), 1_153_433_600);
         assert!(coverage.material_gap());
-    }
-
-    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
-    #[test]
-    fn render_config_cache_without_exact_curated_matches_stays_clean() {
-        let finding = windows_impl::render_config_cache_finding_from_matches(
-            Vec::new(),
-            vec![
-                "Network=775".to_string(),
-                "UGCValidateFullBodyXMaxClassic=880".to_string(),
-            ],
-        );
-
-        assert!(
-            finding.is_none(),
-            "ordinary cached engine values must not become runtime override evidence"
-        );
-    }
-
-    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
-    #[test]
-    fn render_config_cache_with_three_exact_curated_matches_is_flagged() {
-        let finding = windows_impl::render_config_cache_finding_from_matches(
-            vec![
-                "DFIntRakNetLoopMs=1".to_string(),
-                "DFIntRakNetPingFrequencyMillisecond=1".to_string(),
-                "DFIntRakNetNakResendDelayMs=1".to_string(),
-            ],
-            Vec::new(),
-        )
-        .expect("exact curated matches should produce a finding");
-
-        assert!(matches!(finding.verdict, ScanVerdict::Flagged));
-        assert!(finding
-            .details
-            .as_deref()
-            .unwrap_or_default()
-            .contains("ordinary cached engine values are not treated as injected overrides"));
     }
 
     #[test]
