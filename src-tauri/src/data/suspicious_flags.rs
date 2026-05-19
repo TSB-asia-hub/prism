@@ -161,6 +161,19 @@ pub static CRITICAL_FLAGS: &[&str] = &[
     // ---- Server connection manipulation ----
     "FFlagDebugLocalRccServerConnection",
     "FFlagRefactorPlayerConnect",
+    // ---- 2026 RakNet/codec/packet-pipeline lag-switch family ----
+    // The public TSB / MxStrap config sets every flag below to extreme
+    // values together for a network-starvation lag-switch effect. They
+    // touch every stage of the packet pipeline: codec frame caps, queue
+    // cutoffs, per-cyclic job scaling, RakNet retransmit timers, and
+    // FVar reload throttling. Treated as CRITICAL together so the bare-
+    // key bridge emits Flagged for any matched cheat value.
+    "DFIntCodecMaxIncomingPackets",
+    "DFIntCodecMaxOutgoingFrames",
+    "DFIntMaxProcessPacketsJobScaling",
+    "DFIntMaxProcessPacketsStepsPerCyclic",
+    "DFIntSecondsBetweenDynamicVariableReloading",
+    "DFIntDebugDynamicRenderKiloPixels",
 ];
 
 // =============================================================================
@@ -304,6 +317,91 @@ pub static HIGH_FLAGS: &[&str] = &[
 
     // (FFlagDataModelPatcherForceLocal is an internal migration toggle,
     // not a cheat vector — moved to MEMORY_BASELINE_FLAGS.)
+
+    // ---- UGC avatar-validation bypass (hitbox / clipping abuse) ----
+    // The public 2026 TSB/MxStrap config sets every `UGCValidate*`
+    // dimension flag to `i32_MAX` (2147483647), turning off avatar size
+    // validation so distorted-size avatars load. In a competitive
+    // battlegrounds context that translates to oversized hitboxes,
+    // wall-clipping limbs, and other geometry abuse. Curated as HIGH;
+    // exact cheat-value matching against `2147483647` lives in
+    // `RUNTIME_OVERRIDE_RULES`.
+    "DFIntUGCValidateArmXMaxNormal",
+    "DFIntUGCValidateArmXMinClassic",
+    "DFIntUGCValidateArmXMinNormal",
+    "DFIntUGCValidateArmXMinSlender",
+    "DFIntUGCValidateArmYMaxClassic",
+    "DFIntUGCValidateArmYMaxNormal",
+    "DFIntUGCValidateArmYMaxSlender",
+    "DFIntUGCValidateArmYMinClassic",
+    "DFIntUGCValidateArmYMinNormal",
+    "DFIntUGCValidateArmZMaxClassic",
+    "DFIntUGCValidateArmZMaxSlender",
+    "DFIntUGCValidateArmZMinClassic",
+    "DFIntUGCValidateArmZMinNormal",
+    "DFIntUGCValidateFullBodyXMaxClassic",
+    "DFIntUGCValidateFullBodyXMaxNormal",
+    "DFIntUGCValidateFullBodyXMaxSlender",
+    "DFIntUGCValidateFullBodyXMinClassic",
+    "DFIntUGCValidateFullBodyXMinNormal",
+    "DFIntUGCValidateFullBodyXMinSlender",
+    "DFIntUGCValidateFullBodyYMaxClassic",
+    "DFIntUGCValidateFullBodyYMaxSlender",
+    "DFIntUGCValidateFullBodyYMinClassic",
+    "DFIntUGCValidateFullBodyYMinSlender",
+    "DFIntUGCValidateFullBodyZMaxClassic",
+    "DFIntUGCValidateFullBodyZMaxNormal",
+    "DFIntUGCValidateFullBodyZMaxSlender",
+    "DFIntUGCValidateFullBodyZMinClassic",
+    "DFIntUGCValidateFullBodyZMinNormal",
+    "DFIntUGCValidateHeadXMaxNormal",
+    "DFIntUGCValidateHeadXMaxSlender",
+    "DFIntUGCValidateHeadXMinClassic",
+    "DFIntUGCValidateHeadXMinNormal",
+    "DFIntUGCValidateHeadXMinSlender",
+    "DFIntUGCValidateHeadYMaxClassic",
+    "DFIntUGCValidateHeadYMinClassic",
+    "DFIntUGCValidateHeadYMinNormal",
+    "DFIntUGCValidateHeadYMinSlender",
+    "DFIntUGCValidateHeadZMaxClassic",
+    "DFIntUGCValidateHeadZMaxNormal",
+    "DFIntUGCValidateHeadZMinClassic",
+    "DFIntUGCValidateHeadZMinNormal",
+    "DFIntUGCValidateLegXMaxClassic",
+    "DFIntUGCValidateLegXMaxNormal",
+    "DFIntUGCValidateLegXMaxSlender",
+    "DFIntUGCValidateLegXMinClassic",
+    "DFIntUGCValidateLegXMinNormal",
+    "DFIntUGCValidateLegXMinSlender",
+    "DFFlagUGCValidateLegYMaxClassic",
+    "DFFlagUGCValidateLegYMaxNormal",
+    "DFIntUGCValidateLegYMaxSlender",
+    "DFIntUGCValidateLegYMinClassic",
+    "DFIntUGCValidateLegYMinNormal",
+    "DFIntUGCValidateLegYMinSlender",
+    "DFIntUGCValidateLegZMaxClassic",
+    "DFIntUGCValidateLegZMaxNormal",
+    "DFIntUGCValidateLegZMaxSlender",
+    "DFIntUGCValidateLegZMinNormal",
+    "DFIntUGCValidateLegZMinSlender",
+    "DFIntUGCValidateTorsoXMaxClassic",
+    "DFIntUGCValidateTorsoXMaxNormal",
+    "DFIntUGCValidateTorsoXMaxSlender",
+    "DFIntUGCValidateTorsoXMinClassic",
+    "DFIntUGCValidateTorsoXMinNormal",
+    "DFIntUGCValidateTorsoXMinSlender",
+    "DFIntUGCValidateTorsoYMaxClassic",
+    "DFIntUGCValidateTorsoYMaxNormal",
+    "DFIntUGCValidateTorsoYMaxSlender",
+    "DFIntUGCValidateTorsoYMinNormal",
+    "DFIntUGCValidateTorsoYMinSlender",
+    "DFIntUGCValidateTorsoZMaxClassic",
+    "DFIntUGCValidateTorsoZMaxNormal",
+    "DFIntUGCValidateTorsoZMinClassic",
+    "DFIntUGCValidateTorsoZMinNormal",
+    "DFIntUGCValidateTorsoZMinSlender",
+    "DFIntUGCValidateTriangleLimitDynamicHead",
+    "DFIntUGCValidateTriangleLimitLeftLeg",
 ];
 
 // =============================================================================
