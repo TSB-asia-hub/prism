@@ -355,6 +355,57 @@ const RUNTIME_FLAG_BASELINES: &[RuntimeFlagBaseline] = &[
         deviation_verdict: ScanVerdict::Suspicious,
         note: "Camera far-clip plane diverges from baseline - exploit sets 0 to disable culling",
     },
+    // ---- Vanilla values pulled from MaximumADHD/Roblox-FFlag-Tracker
+    //      (PCDesktopClient.json — Roblox's public application-settings
+    //      endpoint snapshot). These are flags the public TSB / MxStrap
+    //      lag-switch config writes; the tracker confirms Roblox publicly
+    //      ships specific values for each, so any live deviation is an
+    //      external write rather than a Roblox-side A/B rollout.
+    //      Severity is Suspicious by default; pair with the specific
+    //      `RUNTIME_OVERRIDE_RULES` cheat-value entry above to elevate
+    //      a known cheat value to Flagged.
+    RuntimeFlagBaseline {
+        name: "FIntCLI20390_2",
+        default_value: RuntimeFlagValue::Int(16),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (16). 0 is the public TSB lag-switch value used to disable a packet-pipeline counter.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntRaknetBandwidthInfluxHundredthsPercentageV2",
+        default_value: RuntimeFlagValue::Int(100),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (100 hundredths-percent ≈ 1%). Public lag-switch sets 10000 to inflate bandwidth influx 100x.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntRaknetBandwidthPingSendEveryXSeconds",
+        default_value: RuntimeFlagValue::Int(300),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (300s ping interval). Public lag-switch sets 1 to spam-ping every second.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds",
+        default_value: RuntimeFlagValue::Int(1000),
+        deviation_verdict: ScanVerdict::Flagged,
+        note: "Tracker-confirmed vanilla (1000ms debounce). 0 disables the SafetyService anti-cheat screenshot — direct anti-anti-cheat tampering, Flagged at any deviation.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntSimTimestepMultiplierDebounceCount",
+        default_value: RuntimeFlagValue::Int(60),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (60-step debounce). 0 removes the simulation-timestep debounce, enabling timestep manipulation.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntWaitOnRecvFromLoopEndedMS",
+        default_value: RuntimeFlagValue::Int(10_000),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (10s recv-loop end wait). 1 reduces the loop-end window to 1ms — RakNet-shutdown abuse / lag-switch family.",
+    },
+    RuntimeFlagBaseline {
+        name: "DFIntWaitOnUpdateNetworkLoopEndedMS",
+        default_value: RuntimeFlagValue::Int(10_000),
+        deviation_verdict: ScanVerdict::Suspicious,
+        note: "Tracker-confirmed vanilla (10s network-loop end wait). 10 reduces the loop-end window 1000x — network-shutdown abuse / lag-switch family.",
+    },
 ];
 
 /// Values seen in public desync/ESP configs or in the deobfuscated
@@ -856,11 +907,13 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Int(100),
         string_scan_promote: false,
     },
-    RuntimeOverrideRule {
-        name: "FLogNetwork",
-        value: RuntimeFlagValue::Int(7),
-        string_scan_promote: false,
-    },
+    // FLogNetwork=7 was previously flagged as a cheat value, but
+    // MaximumADHD's Roblox-FFlag-Tracker (PCDesktopClient.json) confirms
+    // Roblox publicly ships this flag at value 7 — it's the normal verbose
+    // network-log level shipped to every live client. Removing the rule;
+    // a real injector-set FLogNetwork would only stand out if the value
+    // were unusual, and we don't have a curated set of "unusual" values
+    // for this flag.
     RuntimeOverrideRule {
         name: "DFIntMaxProcessPacketsStepsPerCyclic",
         value: RuntimeFlagValue::Int(5_000),
