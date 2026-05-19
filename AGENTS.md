@@ -237,17 +237,23 @@ with per-flag severity context — but the generic path is the safety net.
   in `collect_fflag_shaped_entries` resolves the entry, and
   `inspect_generic_singleton_overrides` then emits the curated Critical
   finding directly for the matched flag.
-- **Bucket-walk coverage is not complete.** The walk enumerates every bucket
-  and chains, but on live tests some specific entries (e.g.
-  `S2PhysicsSenderRate`) have not been observed in the collected set even
-  when TSBAH successfully wrote to them, while other prefixed-form entries
-  (`FFlag*`, `DFFlag*`) and bare-form entries (`RakNetLoopMs`,
-  `NextGenReplicatorEnabledWrite4`) are visited normally. The root cause
-  is likely a chunked `ReadProcessMemory` failure on the bucket address
-  range containing the missing entry, or a node-layout mismatch the
-  current `STANDARD_NODE_LAYOUT` / `ALTERNATIVE_NODE_LAYOUTS` set doesn't
-  cover. Investigation is worth a future pass; for now the detection is
-  best-effort over the entries the walk does visit.
+- **Bucket-walk coverage requires the right cap.** Live Roblox tables hold
+  20k–30k FFlags; `GENERIC_FFLAG_ENTRY_CAP` is set to 65,536 so the walk
+  doesn't break out of its outer layout loop before reaching the late
+  buckets. At a lower cap (16,384 was the original value) entries whose
+  bucket happens to be enumerated late were silently skipped — verified
+  by directed `lookup_runtime_flag_entry` finding `S2PhysicsSenderRate`
+  while the enumeration walk missed it. Raising the cap fixed it.
+- **Use `read_remote_node_string_relaxed` in enumeration, not the strict
+  reader.** The strict `read_remote_node_string` rejects nodes with
+  `cap > MAX_IDENT_BODY_LEN + 32`, but live Roblox `std::string`
+  allocations frequently report larger capacities for heap-grown strings.
+  The directed `remote_node_string_matches` lookup doesn't have that
+  upper-bound check (it falls back to comparing the inline byte slot
+  against the expected name), so it reaches entries the strict reader
+  silently drops. The relaxed reader replicates that tolerance for the
+  enumeration path: try inline first, then dereference the heap pointer
+  without an artificial cap ceiling.
 
 ## Current In-Memory FFlag Detection Context
 
