@@ -916,6 +916,112 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Int(2_147_483_647),
         string_scan_promote: true,
     },
+    // ---- 2026 TSB / MxStrap lag-switch family (network/timing extras) ----
+    // Specific cheat values pulled from the public TSB config; complement
+    // the existing RakNet timing rules that already covered the rest of
+    // the family.
+    RuntimeOverrideRule {
+        name: "DFIntSecondsBetweenDynamicVariableReloading",
+        value: RuntimeFlagValue::Int(9_999),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntDebugDynamicRenderKiloPixels",
+        value: RuntimeFlagValue::Int(2_000),
+        string_scan_promote: false,
+    },
+    // ---- UGC avatar-validation bypass: i32_MAX (2,147,483,647) on every
+    //      dimension limit so distorted-size avatars load without server
+    //      rejection. Two specific limbs use bool-typed legacy variants
+    //      (`DFFlagUGCValidateLegY{Max,Normal}Classic`) where the cheat
+    //      value is `true`. Each rule's string_scan_promote is `true`
+    //      because the i32_MAX magnitude is bizarre enough that no shipping
+    //      Roblox client would have it as a default — the string-scan
+    //      promotion path can safely use it without per-flag curation.
+    RuntimeOverrideRule {
+        name: "DFFlagUGCValidateLegYMaxClassic",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule {
+        name: "DFFlagUGCValidateLegYMaxNormal",
+        value: RuntimeFlagValue::Bool(true),
+        string_scan_promote: false,
+    },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMinSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMinNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMaxNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMaxSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMaxClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMaxClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMaxNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTriangleLimitDynamicHead", value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule { name: "DFIntUGCValidateTriangleLimitLeftLeg",  value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
 ];
 
 /// Aggregated state for high-risk strings that offset-based FFlag injectors
@@ -1883,6 +1989,16 @@ pub(crate) struct RuntimeKeyClassification {
 /// bare form and each prefix in `FLAG_PREFIXES`. Returns the developer-facing
 /// form alongside per-list membership when a curated entry matches; falls
 /// back to the bare form when no curated entry recognises the key.
+///
+/// `display_name` resolution looks at every curated table that uses the
+/// developer-facing prefixed form — `ALLOWED_FLAGS`, `MEMORY_BASELINE_FLAGS`,
+/// `CRITICAL_FLAGS`, `HIGH_FLAGS`, `MEDIUM_FLAGS`, `RUNTIME_OVERRIDE_RULES`,
+/// and `RUNTIME_FLAG_BASELINES`. Without all of these, a flag whose only
+/// curated presence is in (say) `MEDIUM_FLAGS` + `RUNTIME_OVERRIDE_RULES`
+/// (which is the case for the entire RakNet timing-cheat family) would
+/// silently fail the bridge: classification would return the bare key, the
+/// override-rule filter would miss because rule names are prefixed, and the
+/// finding would never emit.
 pub(crate) fn classify_runtime_key(bare_key: &str) -> RuntimeKeyClassification {
     // Build the set of candidate full names: the bare form plus each
     // prefix combined with the bare form. Some Roblox flags (e.g.
@@ -1912,6 +2028,26 @@ pub(crate) fn classify_runtime_key(bare_key: &str) -> RuntimeKeyClassification {
         }
         if CRITICAL_FLAGS.iter().any(|&c| c == candidate.as_str()) {
             is_critical = true;
+            matched = true;
+        }
+        // Lower-tier severity lists count for `display_name` resolution but
+        // not for `is_critical`. The bridge downstream consults
+        // `get_flag_severity` for the actual verdict tier.
+        if HIGH_FLAGS.iter().any(|&h| h == candidate.as_str())
+            || MEDIUM_FLAGS.iter().any(|&m| m == candidate.as_str())
+        {
+            matched = true;
+        }
+        // Override-rule and baseline tables also define the prefixed
+        // developer-facing form — they are authoritative for the bridge
+        // even when no severity tier names the flag.
+        if RUNTIME_OVERRIDE_RULES
+            .iter()
+            .any(|r| r.name == candidate.as_str())
+            || RUNTIME_FLAG_BASELINES
+                .iter()
+                .any(|b| b.name == candidate.as_str())
+        {
             matched = true;
         }
         if matched && display_name == bare_key {
@@ -8283,6 +8419,31 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn classify_runtime_key_bridges_via_medium_tier() {
+        // `DFIntRakNetLoopMs` is in `MEDIUM_FLAGS`, not `CRITICAL_FLAGS`.
+        // The classifier still needs to bridge the bare key to its
+        // prefixed form so the `RUNTIME_OVERRIDE_RULES` filter downstream
+        // can match. Before this, only CRITICAL_FLAGS was consulted and
+        // every MEDIUM/HIGH RakNet timing-cheat write silently dropped.
+        let c = classify_runtime_key("RakNetLoopMs");
+        assert_eq!(c.display_name, "DFIntRakNetLoopMs");
+        assert!(!c.is_critical, "should be MEDIUM tier, not critical");
+    }
+
+    #[test]
+    fn classify_runtime_key_bridges_via_override_rule_when_no_severity_tier() {
+        // `DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds` has a
+        // `RUNTIME_OVERRIDE_RULES` rule but is not on any severity tier
+        // list. The classifier must still bridge it so the bare-key bucket
+        // walk emits the curated override finding.
+        let c = classify_runtime_key("SafetyServiceScreenshotAMCDebouncePeriodMilliseconds");
+        assert_eq!(
+            c.display_name,
+            "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds"
+        );
     }
 
     #[test]
