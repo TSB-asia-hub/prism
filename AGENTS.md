@@ -159,7 +159,8 @@ Important memory scanner helpers and concepts:
 - `lookup_runtime_flag_entry`: directed lookup using hash + bucket walk.
 - `scan_runtime_registry_interesting_entries`: fallback bucket enumeration for known/probe/baseline flags.
 - `collect_fflag_shaped_entries`: bucket enumeration that yields any FFlag-shaped node (bare or prefixed). Feeds the bare-key singleton-injection bridge.
-- `inspect_generic_singleton_overrides`: bare-key bridge for the curated cheat-rule and curated-baseline detection paths. Walks the FVar table directly, classifies each bare-key entry back to its developer-facing form, and emits the curated `RUNTIME_OVERRIDE_RULES` / `runtime_flag_baseline_finding` findings for entries the legacy hash lookup misses. Emits a Clean diagnostic when no curated entry triggers a finding.
+- `inspect_generic_singleton_overrides`: bare-key bridge for the curated cheat-rule, curated-baseline, and public-tracker detection paths. Walks the FVar table directly, classifies each bare-key entry back to its developer-facing form, and emits findings for matched entries. Emits a Clean diagnostic when nothing fires.
+- `data/tracker_baselines.rs`: loader for the bundled `MaximumADHD/Roblox-FFlag-Tracker` snapshot (`data/tracker/pc_desktop_client.json`). Exposes `tracker_baseline_for_name` returning `TrackerValue::Bool` or `TrackerValue::Int` for ~18.7k publicly-exposed FFlags. Refreshed nightly by the `refresh-tracker-baselines` GitHub Actions workflow.
 - `RUNTIME_VALUE_PTR_OFFSET`: entry field offset to the actual value pointer, currently `0xC0`.
 - `NodeLayout`: candidate hash-node layouts for Roblox/STL changes.
 - Anchor/pointer discovery paths are diagnostic/fallback scaffolding and can be noisy.
@@ -221,6 +222,34 @@ What this path deliberately does NOT do:
   silently drops. The relaxed reader replicates that tolerance for the
   enumeration path: try inline first, then dereference the heap pointer
   without an artificial cap ceiling.
+
+### Public-tracker baseline path (v0.9.0+)
+
+The bundled `data/tracker/pc_desktop_client.json` snapshot of
+`MaximumADHD/Roblox-FFlag-Tracker` adds ~18.7k bool/int FFlag baselines
+on top of the hand-curated `RUNTIME_FLAG_BASELINES` (~18 entries) and
+`RUNTIME_OVERRIDE_RULES` (~150 entries). The bridge consults the tracker
+*last* — only after no curated rule or curated baseline has matched —
+and caps tracker-derived findings at `Suspicious` always.
+
+**Why capped at Suspicious:** the bundle is a snapshot. Roblox A/B-rolls
+flag values continuously; what looks like a live deviation may simply
+reflect a fresh Roblox-side rollout the bundle hasn't caught yet.
+Operators review tracker-derived findings. Trustworthy Flagged verdicts
+remain the exclusive output of the curated paths.
+
+**Refresh discipline:** `.github/workflows/refresh-tracker-baselines.yml`
+fetches the latest snapshot daily at 03:00 UTC and opens a PR. Merging
+the PR runs the release pipeline; the new bundle ships with the next
+tagged release. If the upstream tracker is unavailable, the workflow
+fails the run (refusing a suspiciously small snapshot) and the bundle
+stays at the previous good value.
+
+**Coverage gap:** the tracker only carries flags Roblox exposes via the
+public application-settings endpoint. Debug/internal FFlags (the bulk
+of the cheat-target surface — `DFIntRakNetLoopMs`,
+`DFIntMaxDataPacketPerSend`, every `UGCValidate*`, etc.) are not in the
+tracker and continue to rely on `RUNTIME_OVERRIDE_RULES` curation.
 
 ## Current In-Memory FFlag Detection Context
 
