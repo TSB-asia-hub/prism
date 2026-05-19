@@ -75,37 +75,12 @@ const FNV1A64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV1A64_PRIME: u64 = 0x100000001b3;
 
 /// Per-singleton hard cap on the FFlag-shaped entries collected during the
-/// generic disk-default-deviation walk. The underlying bucket walk is already
-/// bounded by `RUNTIME_ENUM_MAX_NODES_PER_LAYOUT` (65,536 nodes per layout),
-/// and live Roblox tables contain ~20–30k FFlags total, so this cap needs to
-/// be at least as large as the underlying walk bound — otherwise entries in
-/// later buckets are silently skipped once the cap is hit (we observed
-/// `S2PhysicsSenderRate` being dropped this way at the previous 16384 cap).
+/// bare-key bucket walk. Live Roblox tables contain ~20–30k FFlags, and the
+/// walk's outer loop breaks when this cap is hit, so it must be at least as
+/// large as the underlying `RUNTIME_ENUM_MAX_NODES_PER_LAYOUT` (65,536) to
+/// avoid silently skipping entries in late-enumerated buckets. We observed
+/// `S2PhysicsSenderRate` being dropped this way at the previous 16,384 cap.
 const GENERIC_FFLAG_ENTRY_CAP: usize = 65_536;
-
-/// Maximum number of deviating flag names included in the summary detail
-/// string. Keeps the report readable; the full count is reported separately.
-const GENERIC_SINGLETON_SUMMARY_NAME_CAP: usize = 12;
-
-/// Magnitude cutoff for the generic disk-default deviation check.
-///
-/// `entry+0xC0` points to a 4-byte value slot, but the FVar template stores
-/// different concrete types in equally-sized cells depending on whether the
-/// flag is `FFlag` (bool), `FInt` (i32), `FString` (8-byte std::string head,
-/// where the first 4 bytes are a heap pointer or SSO data), or `FFloat`
-/// (32-bit float). The disk-default path reads 4 bytes from the same RVA
-/// regardless. For bool/int the comparison is sound. For float and string,
-/// the bit-pattern interpretation as i32 produces values that look like
-/// heap pointers (high magnitudes) or float-encoded fractions (also high
-/// magnitudes after bit reinterpretation) — both create false positives.
-///
-/// A real Roblox bool or int FFlag never legitimately reaches this magnitude:
-/// the largest baseline in `RUNTIME_FLAG_BASELINES` is 100,000
-/// (`FIntCameraFarZPlane`), and even outliers like packet caps stay well
-/// under one million. We use 50 million as the cutoff to keep generous
-/// headroom for any plausibly-real int FFlag while filtering the obvious
-/// pointer / float bit-pattern reads.
-const GENERIC_SINGLETON_VALUE_MAGNITUDE_CAP: i64 = 50_000_000;
 const RUNTIME_TABLE_OFFSET_FROM_SINGLETON: usize = 0x8;
 const RUNTIME_TABLE_SIZE: usize = 0x38;
 const RUNTIME_TABLE_MAX_MASK: u64 = 0x00ff_ffff;
@@ -1952,138 +1927,6 @@ pub(crate) fn classify_runtime_key(bare_key: &str) -> RuntimeKeyClassification {
     }
 }
 
-/// A single live-vs-disk-default mismatch produced by the generic singleton
-/// injection path. One row per `(name, value_ptr)` pair the bucket walk
-/// resolved and whose live i32 differs from the Roblox executable's
-/// shipped default at the same RVA.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GenericSingletonDeviation {
-    pub(crate) name: String,
-    pub(crate) observed: i32,
-    pub(crate) expected: i32,
-    /// `true` if the flag matches the official Roblox September-2025 allowlist
-    /// (`flag_allowlist::is_allowed_flag`). Allowlisted flags are excluded
-    /// from verdict elevation — a user is permitted to set them.
-    pub(crate) is_allowlisted: bool,
-    /// `true` if the flag is in `MEMORY_BASELINE_FLAGS` — names Roblox itself
-    /// is known to overwrite at runtime (telemetry rollout, A/B, UI chrome).
-    /// Excluded for the same reason: not evidence of an external write.
-    pub(crate) is_roblox_runtime_overridden: bool,
-    /// `true` if the flag is in `CRITICAL_FLAGS` per `suspicious_flags.rs`.
-    /// A single critical deviation is enough to elevate the summary verdict
-    /// to `Flagged` regardless of total deviation count.
-    pub(crate) is_critical: bool,
-}
-
-/// True when both sides of a deviation fit in the int-FFlag magnitude window.
-///
-/// FVar value cells are uniformly 4 bytes, but the stored type varies (bool,
-/// i32, f32, or the first 4 bytes of an 8-byte std::string head). The
-/// disk-default reader interprets the 4 bytes as i32 regardless. For bool
-/// and i32 cells the comparison is meaningful. For string and float cells
-/// it is not — the bit-pattern interpretation produces values in heap
-/// pointer / float bit-pattern ranges that have no relationship to the
-/// flag's actual contents. The magnitude cap suppresses those rows.
-pub(crate) fn deviation_within_int_magnitude(observed: i32, expected: i32) -> bool {
-    (observed as i64).abs() <= GENERIC_SINGLETON_VALUE_MAGNITUDE_CAP
-        && (expected as i64).abs() <= GENERIC_SINGLETON_VALUE_MAGNITUDE_CAP
-}
-
-/// Roll a list of generic singleton deviations into a single summary finding.
-///
-/// Pure function so the verdict logic can be unit-tested without a live
-/// Roblox handle. Returns `None` when no deviations survive the allowlist,
-/// runtime-baseline, and magnitude filters.
-///
-/// Verdict: **always `Suspicious`** when at least one deviation survives the
-/// filters. The generic path is deliberately capped at Suspicious for the
-/// same reason the heap string-scan value-match path is — every live Roblox
-/// client routinely shows hundreds of low-magnitude integer deviations from
-/// the PE `.data` initializer because Roblox runtime-bootstrap code sets
-/// many flags before the FVar table becomes visible. Without a hand-curated
-/// "true vanilla" reference (which `RUNTIME_FLAG_BASELINES` provides only
-/// for ~11 flags), `.data` is not a trustworthy proxy. Auto-Flagging would
-/// therefore mark every vanilla client.
-///
-/// The CRITICAL-flag classification is retained as an informational label
-/// in the detail string so operators can quickly spot when a known
-/// exploit-family name appears in the deviation list, but it does not
-/// elevate the verdict tier. Trustworthy Flagged verdicts for runtime
-/// overrides come exclusively from the curated paths
-/// (`RUNTIME_OVERRIDE_RULES` exact-value matches and
-/// `runtime_flag_baseline_finding` against curated baselines).
-pub(crate) fn aggregate_generic_singleton_finding(
-    pid: u32,
-    candidates_count: usize,
-    inspected_count: usize,
-    skipped_outside_module: usize,
-    deviations: &[GenericSingletonDeviation],
-) -> Option<ScanFinding> {
-    let counted: Vec<&GenericSingletonDeviation> = deviations
-        .iter()
-        .filter(|d| !d.is_allowlisted && !d.is_roblox_runtime_overridden)
-        .filter(|d| deviation_within_int_magnitude(d.observed, d.expected))
-        .collect();
-    if counted.is_empty() {
-        return None;
-    }
-    let any_critical = counted.iter().any(|d| d.is_critical);
-    let count = counted.len();
-    let verdict = ScanVerdict::Suspicious;
-
-    let mut shown: Vec<String> = counted
-        .iter()
-        .take(GENERIC_SINGLETON_SUMMARY_NAME_CAP)
-        .map(|d| {
-            let critical_tag = if d.is_critical { " [CRITICAL-name]" } else { "" };
-            format!("{}={} (default {}){}", d.name, d.observed, d.expected, critical_tag)
-        })
-        .collect();
-    shown.sort();
-
-    let label =
-        "Possible singleton FFlag override: live registry value diverges from Roblox executable default";
-
-    let allowlisted_skipped = deviations.iter().filter(|d| d.is_allowlisted).count();
-    let baseline_skipped = deviations
-        .iter()
-        .filter(|d| d.is_roblox_runtime_overridden && !d.is_allowlisted)
-        .count();
-    let more = count.saturating_sub(shown.len());
-
-    let mut detail = format!(
-        "PID: {} | Singleton candidates: {} | Entries inspected: {} | Skipped (value outside Roblox module): {} | Non-allowlisted deviations: {}{}",
-        pid,
-        candidates_count,
-        inspected_count,
-        skipped_outside_module,
-        count,
-        if any_critical {
-            " | Includes name(s) on CRITICAL list (informational; this path does not elevate to Flagged — see curated RUNTIME_OVERRIDE_RULES path)"
-        } else {
-            ""
-        },
-    );
-    if allowlisted_skipped > 0 || baseline_skipped > 0 {
-        detail.push_str(&format!(
-            " | Suppressed deviations — allowlisted: {}, Roblox-runtime-overridden: {}",
-            allowlisted_skipped, baseline_skipped
-        ));
-    }
-    detail.push_str(" | ");
-    detail.push_str(&shown.join("; "));
-    if more > 0 {
-        detail.push_str(&format!(" (+{} more)", more));
-    }
-    detail.push_str(" | Detection: walked the Roblox FastFlag hash table from the resolved singleton, read live i32 at entry+0xC0 for each FFlag-shaped node, compared against the curated RUNTIME_FLAG_BASELINES value (when present) or the same RVA in the Roblox executable image on disk. Any singleton-based memory injector that writes through entry+0xC0 leaves this signal regardless of which tool produced the write. Verdict is capped at Suspicious; trust the curated paths for Flagged.");
-
-    Some(ScanFinding::new(
-        "memory_scanner",
-        verdict,
-        label.to_string(),
-        Some(detail),
-    ))
-}
 
 fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
     let observed_int = i32::from_le_bytes(raw_value);
@@ -4584,46 +4427,49 @@ mod windows_impl {
         out
     }
 
-    /// Generic singleton-injection detection: for each discovered
-    /// `RuntimeRegistryCandidate`, walks the FVar hash table, and for every
-    /// FFlag-shaped node compares the live `*((u32*)(entry+0xC0))` against
-    /// the Roblox executable's shipped default at the same RVA. Any deviation
-    /// for a non-allowlisted, non-Roblox-runtime-overridden flag participates
-    /// in a single aggregate finding emitted via
-    /// `aggregate_generic_singleton_finding`.
+    /// Bare-key bridge for the curated singleton-injection detection paths.
     ///
-    /// This path is generic across singleton injector implementations: it
-    /// makes no assumption about which tool wrote the override, only that the
-    /// override exists at the well-defined value-pointer slot every singleton
-    /// injector must walk to. Singleton injectors that strip their own
-    /// markers, change names, or remove their UI still produce this signal
-    /// because the cheat effect itself lives in process memory.
+    /// Roblox keys the FVar registry by BARE names (`S2PhysicsSenderRate`,
+    /// not `DFIntS2PhysicsSenderRate`). The legacy `inspect_runtime_fflag_registry`
+    /// curated paths call `lookup_runtime_flag_entry` with the developer-facing
+    /// prefixed name and FNV-1a-hash that into a bucket — which misses every
+    /// prefixed flag because the table key is bare. This pass walks every
+    /// FFlag-shaped node directly via `collect_fflag_shaped_entries`, classifies
+    /// each bare key back to its developer-facing form via `classify_runtime_key`,
+    /// and emits the same curated findings the legacy path would have produced
+    /// if its hash lookup hadn't missed.
+    ///
+    /// What this path emits:
+    /// - **Critical / Suspicious "Live FastFlag registry override"** when a
+    ///   walked entry matches a `RUNTIME_OVERRIDE_RULES` exact cheat value.
+    /// - **Baseline-deviation finding** (via `runtime_flag_baseline_finding`)
+    ///   when a walked entry has a `RUNTIME_FLAG_BASELINES` curated vanilla
+    ///   value and the live value differs.
+    /// - **Clean diagnostic** when the walk completed but no curated entry
+    ///   produced a finding — useful for operators to see that the path ran
+    ///   and how many entries it inspected.
+    ///
+    /// What this path deliberately does NOT do:
+    /// - Compare live values against the PE `.data` initializer for
+    ///   non-curated flags. Roblox runtime bootstrap code sets hundreds of
+    ///   flags away from their `.data` defaults on every clean client, so
+    ///   a `.data`-based deviation count is permanently non-zero in vanilla
+    ///   state and is not a usable detection signal. Curated coverage in
+    ///   `RUNTIME_FLAG_BASELINES` / `RUNTIME_OVERRIDE_RULES` is the
+    ///   trustworthy source of truth; growing that curation is the way to
+    ///   extend detection coverage.
     fn inspect_generic_singleton_overrides(
         handle: HANDLE,
         pid: u32,
-        exe_path: Option<&str>,
+        _exe_path: Option<&str>,
         candidates: &[RuntimeRegistryCandidate],
     ) -> Vec<ScanFinding> {
         if candidates.is_empty() {
             return Vec::new();
         }
-        let main_module = main_module_info_windows(handle);
-        let image_defaults = PeImageDefaults::load(exe_path);
-        let mut deviations: Vec<GenericSingletonDeviation> = Vec::new();
         let mut inspected_count = 0usize;
-        let mut skipped_outside_module = 0usize;
         let mut total_collected = 0usize;
-        let mut sample_names: Vec<String> = Vec::new();
         let mut seen_name_ptr: HashSet<(String, usize)> = HashSet::new();
-        // Curated-baseline / curated-rule findings emitted directly from this
-        // path. The existing `inspect_runtime_fflag_registry` curated paths
-        // call `lookup_runtime_flag_entry` with the developer-facing name
-        // (`DFIntS2PhysicsSenderRate`) and FNV-1a-hash that to find a bucket;
-        // but the Roblox FVar registry stores BARE keys
-        // (`S2PhysicsSenderRate`), so that hash lookup misses. The bucket
-        // walk in this path resolves the bare-key entry directly, so we can
-        // emit the curated finding ourselves once we've classified the bare
-        // name back to its developer-facing form.
         let mut curated_findings: Vec<ScanFinding> = Vec::new();
         let mut curated_emitted: HashSet<String> = HashSet::new();
 
@@ -4632,9 +4478,6 @@ mod windows_impl {
                 collect_fflag_shaped_entries(handle, candidate.singleton, GENERIC_FFLAG_ENTRY_CAP);
             total_collected = total_collected.saturating_add(entries.len());
             for (name, entry) in entries {
-                if sample_names.len() < 8 {
-                    sample_names.push(name.clone());
-                }
                 let value_ptr = match read_process_u64(
                     handle,
                     entry.saturating_add(RUNTIME_VALUE_PTR_OFFSET),
@@ -4651,20 +4494,12 @@ mod windows_impl {
                 };
                 inspected_count = inspected_count.saturating_add(1);
 
-                let observed = i32::from_le_bytes(raw_value);
                 let classification = classify_runtime_key(&name);
 
-
-                // Before anything else: if there's an exact curated cheat-value
-                // rule for this name, emit the Critical "Live FastFlag registry
-                // override" finding directly (same shape as
-                // `inspect_runtime_fflag_registry`'s curated path produces).
-                // We can only do this here — the curated path's own
-                // `lookup_runtime_flag_entry` FNV-1a-hashes the developer-facing
-                // name, but the FVar table stores the bare key, so that lookup
-                // misses for every prefixed flag. Our bucket walk has already
-                // resolved the bare-key entry; this is the only place the
-                // critical-rule check sees an entry to read.
+                // Curated cheat-value rule match: emit the Critical "Live
+                // FastFlag registry override" finding directly. The legacy
+                // path can't reach this entry because its lookup hashes the
+                // developer-facing prefixed name.
                 for &rule in RUNTIME_OVERRIDE_RULES
                     .iter()
                     .filter(|r| r.name == classification.display_name)
@@ -4700,120 +4535,55 @@ mod windows_impl {
                     ));
                 }
 
-                // Curated baseline takes precedence over the disk .data
-                // default. Many flags (e.g. DFIntS2PhysicsSenderRate) are
-                // initialised by Roblox runtime code rather than from the
-                // PE's .data section, so the .data byte is the *initial*
-                // zero state and not the vanilla runtime value. The hand-
-                // curated RUNTIME_FLAG_BASELINES encodes the post-bootstrap
-                // value a clean client actually shows. When a curated entry
-                // exists, treat *that* as the truth and emit the baseline-
-                // deviation finding directly (with full severity context)
-                // because the curated path's own lookup misses bare keys.
-                let expected = match runtime_baseline_for_name(&classification.display_name) {
-                    Some(baseline) => {
-                        if runtime_value_from_raw(raw_value, baseline.default_value)
-                            == baseline.default_value
-                        {
-                            // Live value matches curated vanilla — flag is in
-                            // its expected post-bootstrap state.
-                            continue;
-                        }
-                        if curated_emitted.insert(classification.display_name.clone()) {
-                            if let Some(finding) = runtime_flag_baseline_finding(
-                                pid, baseline, candidate.singleton, entry, value_ptr,
-                                raw_value,
-                            ) {
-                                curated_findings.push(finding);
-                            }
-                        }
-                        // Either way, do not also record into the generic
-                        // deviation aggregate — the curated finding above
-                        // is the authoritative emit for this flag.
+                // Curated baseline deviation: live value differs from the
+                // hand-curated vanilla post-bootstrap value. Defer to
+                // `runtime_flag_baseline_finding` for the same shape the
+                // legacy path produces.
+                if let Some(baseline) = runtime_baseline_for_name(&classification.display_name) {
+                    if runtime_value_from_raw(raw_value, baseline.default_value)
+                        == baseline.default_value
+                    {
                         continue;
                     }
-                    None => {
-                        // No curated baseline. Fall back to the PE .data
-                        // default. This catches the long tail of flags that
-                        // have a meaningful .data initializer and are not
-                        // runtime-set by Roblox internals.
-                        match module_file_default_for_addr(
+                    if curated_emitted.insert(classification.display_name.clone()) {
+                        if let Some(finding) = runtime_flag_baseline_finding(
+                            pid,
+                            baseline,
+                            candidate.singleton,
+                            entry,
                             value_ptr,
-                            main_module,
-                            image_defaults.as_ref(),
+                            raw_value,
                         ) {
-                            Some(v) => v,
-                            None => {
-                                skipped_outside_module =
-                                    skipped_outside_module.saturating_add(1);
-                                continue;
-                            }
+                            curated_findings.push(finding);
                         }
                     }
-                };
-                if observed == expected {
-                    continue;
                 }
-                deviations.push(GenericSingletonDeviation {
-                    name: classification.display_name,
-                    observed,
-                    expected,
-                    is_allowlisted: classification.is_allowlisted,
-                    is_roblox_runtime_overridden: classification.is_roblox_runtime_overridden,
-                    is_critical: classification.is_critical,
-                });
             }
         }
 
-        let mut findings = Vec::new();
-        // Per-flag curated findings come first — these are the trustworthy
-        // Flagged emits driven by the curated cheat-value rules and curated
-        // baselines, replicated here for bare-key entries the legacy curated
-        // path's hash lookup couldn't resolve.
-        findings.extend(curated_findings);
-        if let Some(finding) = aggregate_generic_singleton_finding(
-            pid,
-            candidates.len(),
-            inspected_count,
-            skipped_outside_module,
-            &deviations,
-        ) {
-            findings.push(finding);
-        } else if findings.is_empty() {
-            // No deviations passed the filters. Emit a Clean diagnostic so
-            // operators can see whether the walk actually inspected entries
-            // (a Clean with non-zero inspected_count is a real negative
-            // result; a Clean with zero inspected_count means the bucket
-            // walk or disk-default lookup didn't get a foothold).
-            let exe_state = if image_defaults.is_some() {
-                "loaded"
-            } else if exe_path.is_some() {
-                "exe path present but PE image not loadable"
-            } else {
-                "no exe path"
-            };
-            let module_state = match main_module {
-                Some((b, s)) => format!("base=0x{:X} size=0x{:X}", b, s),
-                None => "(none)".to_string(),
-            };
-            findings.push(ScanFinding::new(
-                "memory_scanner",
-                ScanVerdict::Clean,
-                "Generic singleton FFlag injection check completed; no non-allowlisted deviations from Roblox executable defaults",
-                Some(format!(
-                    "PID: {} | Singleton candidates: {} | FFlag-shaped entries collected from bucket walk: {} | Entries inspected (live read OK): {} | Skipped (value pointer outside Roblox main module or RVA out of section): {} | Roblox PE image: {} | Main module: {} | Sample names: {}",
-                    pid,
-                    candidates.len(),
-                    total_collected,
-                    inspected_count,
-                    skipped_outside_module,
-                    exe_state,
-                    module_state,
-                    if sample_names.is_empty() { "(none)".to_string() } else { sample_names.join(", ") },
-                )),
-            ));
+        if !curated_findings.is_empty() {
+            return curated_findings;
         }
-        findings
+
+        // No curated entry triggered a finding. Emit a Clean diagnostic so
+        // operators see that the bare-key bucket walk ran and how many
+        // entries it inspected. A non-zero inspected count with no curated
+        // emit is a genuine clean baseline — non-curated deviations from
+        // PE `.data` are routine on every live client (Roblox runtime
+        // bootstrap sets many flags away from their `.data` value) and are
+        // not actionable detection signal.
+        vec![ScanFinding::new(
+            "memory_scanner",
+            ScanVerdict::Clean,
+            "Bare-key singleton FFlag check completed; no curated cheat-rule or baseline-deviation hits",
+            Some(format!(
+                "PID: {} | Singleton candidates: {} | FFlag-shaped entries walked: {} | Entries inspected (live read OK): {} | This path emits findings only when a walked entry matches a curated RUNTIME_OVERRIDE_RULES cheat value or deviates from a curated RUNTIME_FLAG_BASELINES vanilla value. Non-curated deviations from PE .data are intentionally suppressed because every clean Roblox client shows them.",
+                pid,
+                candidates.len(),
+                total_collected,
+                inspected_count,
+            )),
+        )]
     }
 
     fn record_runtime_resolved_value(
@@ -8462,19 +8232,8 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Generic singleton-injection detection
+    // Bare-key singleton-injection bridge
     // -------------------------------------------------------------------
-
-    fn deviation(name: &str, observed: i32, expected: i32) -> GenericSingletonDeviation {
-        GenericSingletonDeviation {
-            name: name.to_string(),
-            observed,
-            expected,
-            is_allowlisted: is_allowed_flag(name),
-            is_roblox_runtime_overridden: is_memory_baseline_flag(name),
-            is_critical: CRITICAL_FLAGS.iter().any(|&c| c == name),
-        }
-    }
 
     #[test]
     fn fflag_shaped_name_accepts_prefixed_and_bare_camelcase() {
@@ -8572,201 +8331,4 @@ mod tests {
         assert_eq!(c.display_name, "TotallyMadeUpRuntimeKey9999");
     }
 
-    #[test]
-    fn aggregate_generic_singleton_finding_returns_none_for_no_deviations() {
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &[]);
-        assert!(
-            finding.is_none(),
-            "no deviations means no generic-singleton finding"
-        );
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_returns_none_when_all_allowlisted() {
-        // A live deviation on an officially-allowlisted flag (e.g. user has
-        // legitimately set DFFlagTextureQualityOverrideEnabled via Roblox's
-        // own allowlisted-flags system) must NOT raise the generic finding.
-        let deviations = vec![deviation("DFFlagTextureQualityOverrideEnabled", 1, 0)];
-        assert!(deviations[0].is_allowlisted);
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &deviations);
-        assert!(
-            finding.is_none(),
-            "allowlisted-only deviation must not raise verdict, got: {:?}",
-            finding
-        );
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_returns_none_when_all_runtime_overridden() {
-        // Roblox itself overwrites the values of MEMORY_BASELINE_FLAGS at
-        // runtime (telemetry / A-B rollouts). Their on-disk default is
-        // usually false but the live value flips to true on every shipping
-        // client. We must not flag those.
-        let deviations = vec![
-            deviation("FFlagAdServiceEnabled", 1, 0),
-            deviation("FFlagDebugDisplayFPS", 1, 0),
-        ];
-        assert!(deviations.iter().all(|d| d.is_roblox_runtime_overridden));
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &deviations);
-        assert!(
-            finding.is_none(),
-            "Roblox-shipped runtime overrides must not raise verdict, got: {:?}",
-            finding
-        );
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_critical_name_stays_suspicious() {
-        // The generic path is capped at Suspicious regardless of whether
-        // the deviating flag name appears in `CRITICAL_FLAGS`. The reason:
-        // this path uses the PE `.data` initializer (when no curated
-        // baseline exists) as the "vanilla" reference, and `.data` is not
-        // a trustworthy proxy for vanilla state because Roblox runtime
-        // code sets many flags during bootstrap. The CRITICAL-name flag is
-        // retained as informational labelling so operators can see it on
-        // the deviation list, but it does not change the verdict tier.
-        // Trustworthy Flagged verdicts come from the curated paths
-        // (RUNTIME_OVERRIDE_RULES exact-value matches and
-        // runtime_flag_baseline_finding).
-        let deviations = vec![deviation("DFIntS2PhysicsSenderRate", 1, 15)];
-        assert!(deviations[0].is_critical);
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &deviations)
-            .expect("critical-named deviation must still emit a finding");
-        assert!(
-            matches!(finding.verdict, ScanVerdict::Suspicious),
-            "generic path must stay Suspicious even for critical-name deviations, got: {:?}",
-            finding.verdict
-        );
-        let detail = finding.details.as_deref().unwrap_or("");
-        assert!(detail.contains("DFIntS2PhysicsSenderRate=1 (default 15)"));
-        assert!(detail.contains("[CRITICAL-name]"));
-        assert!(detail.contains("informational"));
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_two_noncritical_is_suspicious() {
-        // Two non-allowlisted, non-critical deviations stay Suspicious. A
-        // single live deviation can be a transient telemetry rollout flag
-        // Prism's curated MEMORY_BASELINE_FLAGS hasn't caught yet, so the
-        // tier requires either a critical or three non-critical hits to
-        // elevate.
-        let deviations = vec![
-            deviation("DFIntCustomNotCuratedA", 9999, 0),
-            deviation("DFIntCustomNotCuratedB", 1, 0),
-        ];
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &deviations)
-            .expect("non-critical deviations must still emit a finding");
-        assert!(
-            matches!(finding.verdict, ScanVerdict::Suspicious),
-            "two non-critical deviations should be Suspicious, got: {:?}",
-            finding.verdict
-        );
-        assert!(finding
-            .description
-            .contains("Possible singleton FFlag override"));
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_many_noncritical_stays_suspicious() {
-        // The generic non-critical path is deliberately capped at Suspicious
-        // regardless of count. Roblox itself overwrites a long tail of
-        // telemetry / A/B-rollout flags on every live client, and the
-        // disk-image `.data` defaults are the *initial* zero state rather
-        // than the post-bootstrap state, so a clean client routinely shows
-        // many low-magnitude deviations. Auto-Flagging at three would mark
-        // every vanilla client as Flagged. Critical-flag elevation remains
-        // the only path to a Flagged verdict here.
-        let deviations: Vec<_> = (0..20)
-            .map(|i| deviation(&format!("DFIntNonCuratedRollout{}", i), 1, 0))
-            .collect();
-        assert!(deviations.iter().all(|d| !d.is_critical));
-        let finding = aggregate_generic_singleton_finding(1234, 1, 500, 0, &deviations)
-            .expect("many non-critical deviations should still emit a finding");
-        assert!(
-            matches!(finding.verdict, ScanVerdict::Suspicious),
-            "many non-critical deviations should stay Suspicious, got: {:?}",
-            finding.verdict
-        );
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_filters_high_magnitude_reads() {
-        // High-magnitude values indicate type confusion: the underlying FVar
-        // cell is a string pointer or float bit pattern, not a real int
-        // FFlag. Both halves must fit in the magnitude window before the
-        // deviation is counted.
-        let deviations = vec![
-            // Pointer-shaped value, filtered out.
-            deviation("StringFlagA", 0x3B33A155, 0),
-            // Float bit pattern, filtered out.
-            deviation("FloatFlagB", 1066192077, 0),
-            // Plausible int FFlag, kept.
-            deviation("DFIntCustomNotCuratedC", 1, 0),
-        ];
-        let finding = aggregate_generic_singleton_finding(1234, 1, 500, 0, &deviations)
-            .expect("at least one plausible deviation should emit a finding");
-        let detail = finding.details.as_deref().unwrap_or("");
-        assert!(
-            !detail.contains("StringFlagA"),
-            "high-magnitude entry must be filtered, got: {}",
-            detail
-        );
-        assert!(
-            !detail.contains("FloatFlagB"),
-            "high-magnitude entry must be filtered, got: {}",
-            detail
-        );
-        assert!(detail.contains("DFIntCustomNotCuratedC"));
-        assert!(detail.contains("Non-allowlisted deviations: 1"));
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_returns_none_when_all_filtered_by_magnitude() {
-        // Every deviation is type-confused (string pointer / float bit
-        // pattern), so the magnitude filter rejects all of them. No
-        // finding should be emitted at all.
-        let deviations = vec![
-            deviation("StringFlagA", 0x3B33A155, 0),
-            deviation("StringFlagB", 0x12345678, 0),
-        ];
-        let finding = aggregate_generic_singleton_finding(1234, 1, 500, 0, &deviations);
-        assert!(
-            finding.is_none(),
-            "all-magnitude-filtered deviations must not emit a finding, got: {:?}",
-            finding
-        );
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_filters_allowlisted_from_count() {
-        // Mixed deviation set: one allowlisted (suppressed) + two
-        // non-allowlisted non-critical. Only the two count; verdict stays
-        // Suspicious. The allowlisted entry is reported in the suppression
-        // diagnostic but never participates in the verdict tier.
-        let deviations = vec![
-            deviation("DFFlagTextureQualityOverrideEnabled", 1, 0),
-            deviation("DFIntCustomNotCuratedA", 1, 0),
-            deviation("DFIntCustomNotCuratedB", 1, 0),
-        ];
-        let finding = aggregate_generic_singleton_finding(1234, 1, 200, 0, &deviations)
-            .expect("non-allowlisted deviations should emit a finding");
-        assert!(matches!(finding.verdict, ScanVerdict::Suspicious));
-        let detail = finding.details.as_deref().unwrap_or("");
-        assert!(detail.contains("allowlisted: 1"));
-        assert!(detail.contains("Non-allowlisted deviations: 2"));
-    }
-
-    #[test]
-    fn aggregate_generic_singleton_finding_summary_is_capped() {
-        // More than GENERIC_SINGLETON_SUMMARY_NAME_CAP deviations: the
-        // detail string lists the first cap and notes the remainder via a
-        // "(+N more)" suffix. Keeps the report readable.
-        let deviations: Vec<_> = (0..GENERIC_SINGLETON_SUMMARY_NAME_CAP + 5)
-            .map(|i| deviation(&format!("DFIntGenericA{}", i), 1, 0))
-            .collect();
-        let finding = aggregate_generic_singleton_finding(1234, 1, 5_000, 0, &deviations)
-            .expect("over-cap deviations must emit a finding");
-        let detail = finding.details.as_deref().unwrap_or("");
-        assert!(detail.contains("(+5 more)"));
-    }
 }
