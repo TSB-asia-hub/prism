@@ -284,7 +284,7 @@ jobs:
           dest="release-assets/Prism-${TAG}-${ASSET_SUFFIX}"
           cp "$src" "$dest"
           echo "asset_path=release-assets/*" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=Prism-${TAG}-macos-assets" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=Prism-${TAG}-${ASSET_SUFFIX}-assets" >> "$GITHUB_OUTPUT"
 
       - name: Resolve staged asset name
         id: stage
