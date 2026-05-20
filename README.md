@@ -106,19 +106,38 @@ npm run tauri dev
 npm run tauri build
 ```
 
-**macOS output:**
+**macOS local output:**
 ```
-src-tauri/target/release/bundle/macos/TSB Competitive FFlag Scanner.app
-src-tauri/target/release/bundle/dmg/TSB Competitive FFlag Scanner_<version>_aarch64.dmg
+src-tauri/target/<target>/release/bundle/macos/Prism.app
 ```
 
-**Windows output:**
+The release workflow packages `.dmg` files manually from the signed `.app`:
 ```
-src-tauri/target/release/bundle/msi/TSB Competitive FFlag Scanner_<version>_x64.msi
-src-tauri/target/release/bundle/nsis/TSB Competitive FFlag Scanner_<version>_x64-setup.exe
+Prism-v<version>-macos-aarch64.dmg
+Prism-v<version>-macos-x86_64.dmg
+```
+
+**Windows release output:**
+```
+Prism-v<version>-windows-portable.exe
 ```
 
 CI publishes one portable Windows scanner `.exe` (no installer) plus macOS Intel and Apple Silicon `.dmg`s on every `v*` tag.
+
+### macOS signing and notarization
+
+GitHub-downloaded macOS apps are quarantined by Gatekeeper. A structurally valid `.dmg` that contains a runnable `.app` can still be rejected unless the app is Developer ID signed and notarized by Apple. Ad-hoc signing is only the fallback that gives Apple Silicon binaries a local code signature; it does **not** make normal browser-downloaded apps pass Gatekeeper.
+
+For normal public downloads, configure these GitHub Actions repository secrets before tagging a release:
+
+- `APPLE_CERTIFICATE` — base64-encoded Developer ID Application `.p12` certificate.
+- `APPLE_CERTIFICATE_PASSWORD` — password for that `.p12`.
+- `APPLE_SIGNING_IDENTITY` — certificate identity, e.g. `Developer ID Application: Team Name (TEAMID)`.
+- Notarization credentials, either:
+  - `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), and `APPLE_TEAM_ID`, or
+  - `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH` if using App Store Connect API-key notarization.
+
+The workflow validates the certificate before handing it to Tauri. If the Apple secrets are absent or invalid, release builds fall back to ad-hoc signing and will still be packaged/uploaded, but `spctl --assess` will reject the downloaded app until proper Developer ID notarization is configured.
 
 ---
 
