@@ -7,8 +7,9 @@ use crate::data::suspicious_flags::{
     get_flag_category, get_flag_description, get_flag_severity, CRITICAL_FLAGS, HIGH_FLAGS,
     MEDIUM_FLAGS,
 };
+use crate::data::tracker_baselines::tracker_baseline_for_name;
 #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
-use crate::data::tracker_baselines::{tracker_baseline_for_name, TrackerValue};
+use crate::data::tracker_baselines::TrackerValue;
 use crate::models::{ScanFinding, ScanVerdict};
 use crate::scanners::progress::ScanProgress;
 use std::collections::{HashMap, HashSet};
@@ -1942,18 +1943,6 @@ fn detected_flag_detail(name: &str, value: &str, detection: &str) -> String {
     )
 }
 
-fn detected_flag_detail_group(flags: &[String], detection: &str) -> String {
-    let mut out = format!("Detected flags: {} total", flags.len());
-    for flag in flags {
-        out.push('\n');
-        out.push_str("- ");
-        out.push_str(flag);
-    }
-    out.push_str(" | Detection: ");
-    out.push_str(detection);
-    out
-}
-
 fn detected_flag_detail_with_default(
     name: &str,
     value: &str,
@@ -1974,21 +1963,6 @@ fn runtime_value_from_raw(raw_value: [u8; 4], shape: RuntimeFlagValue) -> Runtim
     }
 }
 
-fn verdict_rank(verdict: &ScanVerdict) -> u8 {
-    match verdict {
-        ScanVerdict::Clean => 0,
-        ScanVerdict::Inconclusive => 1,
-        ScanVerdict::Suspicious => 2,
-        ScanVerdict::Flagged => 3,
-    }
-}
-
-fn max_verdict(current: &mut ScanVerdict, candidate: ScanVerdict) {
-    if verdict_rank(&candidate) > verdict_rank(current) {
-        *current = candidate;
-    }
-}
-
 fn runtime_flag_baseline_finding(
     _pid: u32,
     baseline: &RuntimeFlagBaseline,
@@ -1997,6 +1971,10 @@ fn runtime_flag_baseline_finding(
     _value_ptr: usize,
     raw_value: [u8; 4],
 ) -> Option<ScanFinding> {
+    if is_roblox_managed_live_registry_value(baseline.name, raw_value) {
+        return None;
+    }
+
     let observed = runtime_value_from_raw(raw_value, baseline.default_value);
     if observed == baseline.default_value {
         return None;
@@ -2028,6 +2006,10 @@ fn runtime_node_baseline_finding(
     _value_ptr: usize,
     raw_value: [u8; 4],
 ) -> Option<ScanFinding> {
+    if is_roblox_managed_live_registry_value(baseline.name, raw_value) {
+        return None;
+    }
+
     let observed = runtime_value_from_raw(raw_value, baseline.default_value);
     if observed == baseline.default_value {
         return None;
@@ -2162,6 +2144,92 @@ fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) 
             _ => false,
         },
     }
+}
+
+fn is_roblox_managed_live_registry_value(name: &str, raw_value: [u8; 4]) -> bool {
+    if tracker_baseline_for_name(name).is_some() {
+        return false;
+    }
+
+    let observed = i32::from_le_bytes(raw_value);
+
+    // Captured clean live Roblox sessions on 2026-05-20 show the UGC
+    // dimension-validation family registered at i32::MAX. That value is
+    // no longer distinctive enough to accuse from the live registry alone.
+    if observed == i32::MAX && name.starts_with("DFIntUGCValidate") {
+        return true;
+    }
+    if observed == 1
+        && matches!(
+            name,
+            "DFFlagUGCValidateLegYMaxClassic" | "DFFlagUGCValidateLegYMaxNormal"
+        )
+    {
+        return true;
+    }
+
+    // These exact values are for flags the public tracker does not publish,
+    // and can be Roblox runtime state in a clean process. They remain useful
+    // when observed in config/tool artifacts, but bare entry+0xC0 reads cannot
+    // distinguish Roblox's own write from an injector writing the same value.
+    matches!(
+        (name, observed),
+        ("DFIntActionStationDebounceTime", 0)
+            | ("DFIntClientPacketMaxDelayMs", 0)
+            | ("DFIntCodecMaxIncomingPackets", 100)
+            | ("DFIntCodecMaxOutgoingFrames", 10_000)
+            | ("DFIntDebugDynamicRenderKiloPixels", 2_000)
+            | ("DFIntLargePacketQueueSizeCutoffMB", 1_000)
+            | ("DFIntMaxDataPacketPerSend", 100_000)
+            | ("DFIntMaxProcessPacketsJobScaling", 10_000)
+            | ("DFIntMaxProcessPacketsStepsAccumulated", 0)
+            | ("DFIntMaxProcessPacketsStepsPerCyclic", 5_000)
+            | ("DFIntRakNetLoopMs", 1)
+            | ("DFIntRakNetNakResendDelayMs", 1)
+            | ("DFIntRakNetNakResendDelayMsMax", 1)
+            | ("DFIntRakNetPingFrequencyMillisecond", 1)
+            | ("DFIntRenderingThrottleDelayInMS", 1)
+            | ("DFIntSecondsBetweenDynamicVariableReloading", 9_999)
+            | ("DFIntSimTouchDebounceEntryLimit", 32)
+            | ("FIntActivatedCountTimerMSKeyboard", 0)
+            | ("FIntActivatedCountTimerMSMouse", 0)
+    )
+}
+
+fn runtime_rule_is_live_registry_evidence(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
+    if tracker_baseline_for_name(rule.name).is_some_and(|tracker| tracker.matches_live_i32(raw_value))
+    {
+        return false;
+    }
+
+    runtime_rule_matches_observed(rule, raw_value)
+        && !is_roblox_managed_live_registry_value(rule.name, raw_value)
+}
+
+fn live_registry_rule_verdict(rule_name: &str, raw_value: [u8; 4]) -> ScanVerdict {
+    let tier = get_flag_severity(rule_name);
+    if !matches!(tier, ScanVerdict::Clean | ScanVerdict::Inconclusive) {
+        return tier;
+    }
+    if let Some(baseline) = runtime_baseline_for_name(rule_name) {
+        return baseline.deviation_verdict.clone();
+    }
+    if tracker_baseline_for_name(rule_name)
+        .is_some_and(|tracker| !tracker.matches_live_i32(raw_value))
+    {
+        return ScanVerdict::Suspicious;
+    }
+    tier
+}
+
+fn live_registry_expected_label(rule_name: &str) -> String {
+    if let Some(baseline) = runtime_baseline_for_name(rule_name) {
+        return runtime_value_label(baseline.default_value);
+    }
+    if let Some(tracker) = tracker_baseline_for_name(rule_name) {
+        return tracker.render();
+    }
+    "vanilla".to_string()
 }
 
 fn runtime_exact_rule_matches_name(name: &str, raw_value: [u8; 4]) -> bool {
@@ -4658,6 +4726,24 @@ mod windows_impl {
         out
     }
 
+    /// One row in the aggregated FFlag-injection summary finding. The
+    /// scanner emits a single `ScanFinding` per scan now; this struct is
+    /// the per-flag detail rendered inside that finding's expandable list.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DetectedFlag {
+        /// Developer-facing prefixed name (`DFIntS2PhysicsSenderRate`).
+        name: String,
+        /// Live i32 / bool value rendered as a human-readable string.
+        observed: String,
+        /// Reference vanilla value rendered as a human-readable string.
+        expected: String,
+        /// `"cheat-rule"` for `RUNTIME_OVERRIDE_RULES` exact-value matches,
+        /// `"baseline"` for `RUNTIME_FLAG_BASELINES` curated deviations,
+        /// `"tracker"` for `MaximumADHD/Roblox-FFlag-Tracker` deviations.
+        source: &'static str,
+        verdict: ScanVerdict,
+    }
+
     /// Bare-key bridge for the curated singleton-injection detection paths.
     ///
     /// Roblox keys the FVar registry by BARE names (`S2PhysicsSenderRate`,
@@ -4701,11 +4787,8 @@ mod windows_impl {
         let mut inspected_count = 0usize;
         let mut total_collected = 0usize;
         let mut seen_name_ptr: HashSet<(String, usize)> = HashSet::new();
-        let mut curated_findings: Vec<ScanFinding> = Vec::new();
-        let mut curated_emitted: HashSet<String> = HashSet::new();
-        let mut exact_flags = Vec::new();
-        let mut exact_seen = HashSet::new();
-        let mut exact_verdict = ScanVerdict::Clean;
+        let mut detected: Vec<DetectedFlag> = Vec::new();
+        let mut detected_names: HashSet<String> = HashSet::new();
 
         for candidate in candidates {
             let entries =
@@ -4729,126 +4812,183 @@ mod windows_impl {
                 inspected_count = inspected_count.saturating_add(1);
 
                 let classification = classify_runtime_key(&name);
+                if is_roblox_managed_live_registry_value(&classification.display_name, raw_value) {
+                    continue;
+                }
 
-                // Curated cheat-value rule match: emit the Critical "Live
-                // FastFlag registry override" finding directly. The legacy
-                // path can't reach this entry because its lookup hashes the
-                // developer-facing prefixed name.
+                // (1) Curated cheat-value rule match — exact `(name, value)`
+                // pair from `RUNTIME_OVERRIDE_RULES`. Highest-confidence
+                // signal: the value matches a documented exploit preset.
+                let mut matched_via_rule = false;
                 for &rule in RUNTIME_OVERRIDE_RULES
                     .iter()
                     .filter(|r| r.name == classification.display_name)
                 {
-                    if !runtime_rule_matches_observed(rule, raw_value) {
+                    if !runtime_rule_is_live_registry_evidence(rule, raw_value) {
                         continue;
                     }
-                    if !curated_emitted.insert(classification.display_name.clone()) {
-                        continue;
+                    if !detected_names.insert(classification.display_name.clone()) {
+                        matched_via_rule = true;
+                        break;
                     }
-                    let verdict = get_flag_severity(rule.name);
-                    max_verdict(&mut exact_verdict, verdict);
-                    let flag = format!("{}={}", rule.name, runtime_value_label(rule.value));
-                    if exact_seen.insert(flag.clone()) {
-                        exact_flags.push(flag);
-                    }
+                    let verdict = live_registry_rule_verdict(rule.name, raw_value);
+                    detected.push(DetectedFlag {
+                        name: classification.display_name.clone(),
+                        observed: runtime_value_label(rule.value),
+                        expected: live_registry_expected_label(rule.name),
+                        source: "cheat-rule",
+                        verdict,
+                    });
+                    matched_via_rule = true;
+                    break;
+                }
+                if matched_via_rule {
+                    continue;
                 }
 
-                // Curated baseline deviation: live value differs from the
-                // hand-curated vanilla post-bootstrap value. Defer to
-                // `runtime_flag_baseline_finding` for the same shape the
-                // legacy path produces.
+                // (2) Curated baseline deviation — `RUNTIME_FLAG_BASELINES`
+                // encodes a hand-verified vanilla value; any divergence is
+                // an external write.
                 if let Some(baseline) = runtime_baseline_for_name(&classification.display_name) {
-                    if runtime_value_from_raw(raw_value, baseline.default_value)
-                        == baseline.default_value
-                    {
+                    let observed = runtime_value_from_raw(raw_value, baseline.default_value);
+                    if observed == baseline.default_value {
                         continue;
                     }
-                    if curated_emitted.insert(classification.display_name.clone()) {
-                        if let Some(finding) = runtime_flag_baseline_finding(
-                            pid,
-                            baseline,
-                            candidate.singleton,
-                            entry,
-                            value_ptr,
-                            raw_value,
-                        ) {
-                            curated_findings.push(finding);
-                        }
+                    if detected_names.insert(classification.display_name.clone()) {
+                        detected.push(DetectedFlag {
+                            name: classification.display_name.clone(),
+                            observed: runtime_value_label(observed),
+                            expected: runtime_value_label(baseline.default_value),
+                            source: "baseline",
+                            verdict: baseline.deviation_verdict.clone(),
+                        });
                     }
-                    // A curated baseline took the decision; the tracker
-                    // path is the broader fallback, not a duplicate emitter.
                     continue;
                 }
 
-                // Tracker-baseline path (broad coverage, Suspicious only).
-                //
-                // Roblox-side tracker baselines come from MaximumADHD's
-                // public application-settings snapshot. Capped at Suspicious
-                // because the bundle goes stale as Roblox A/B-rolls flag
-                // values — what looks like a deviation may simply be a
-                // newer rollout the bundle hasn't caught yet. Operators
-                // review tracker-derived findings; the curated paths above
-                // remain the source of trustworthy Flagged verdicts.
-                if classification.is_allowlisted
-                    || classification.is_roblox_runtime_overridden
-                {
+                // (3) Tracker-baseline path — broad coverage from the
+                // bundled MaximumADHD/Roblox-FFlag-Tracker snapshot of
+                // Roblox's public application-settings endpoint.
+                if classification.is_allowlisted || classification.is_roblox_runtime_overridden {
                     continue;
                 }
-                if let Some(tracker_value) =
-                    tracker_baseline_for_name(&classification.display_name)
+                if let Some(tracker_value) = tracker_baseline_for_name(&classification.display_name)
                 {
                     if tracker_value.matches_live_i32(raw_value) {
                         continue;
                     }
-                    if !curated_emitted.insert(classification.display_name.clone()) {
+                    if !detected_names.insert(classification.display_name.clone()) {
                         continue;
                     }
-                    let observed_i32 = i32::from_le_bytes(raw_value);
                     let observed_render = match tracker_value {
                         TrackerValue::Bool(_) => {
-                            if raw_value[0] != 0 { "true".to_string() } else { "false".to_string() }
+                            if raw_value[0] != 0 {
+                                "true".to_string()
+                            } else {
+                                "false".to_string()
+                            }
                         }
-                        TrackerValue::Int(_) => observed_i32.to_string(),
+                        TrackerValue::Int(_) => i32::from_le_bytes(raw_value).to_string(),
                     };
-                    curated_findings.push(ScanFinding::new(
-                        "memory_scanner",
-                        ScanVerdict::Suspicious,
-                        format!(
-                            "Suspicious live FastFlag deviates from public tracker: \"{}\" = {} (tracker vanilla: {})",
-                            classification.display_name,
-                            observed_render,
-                            tracker_value.render(),
-                        ),
-                        Some(format!(
-                            "PID: {} | Source: MaximumADHD/Roblox-FFlag-Tracker public application-settings snapshot. The live value at entry+0xC0 for this FVar differs from Roblox's publicly rolled-out value at the time the bundle was refreshed. Capped at Suspicious because the bundle is a snapshot — Roblox routinely A/B-rolls public flag values and a fresh rollout would also produce this signal. Operators should weigh this together with other findings before action.",
-                            pid,
-                        )),
-                    ));
+                    detected.push(DetectedFlag {
+                        name: classification.display_name.clone(),
+                        observed: observed_render,
+                        expected: tracker_value.render(),
+                        source: "tracker",
+                        verdict: ScanVerdict::Suspicious,
+                    });
                 }
             }
         }
 
-        if !exact_flags.is_empty() {
-            exact_flags.sort_unstable();
-            let description = match exact_verdict {
-                ScanVerdict::Flagged => "Critical live FastFlag registry overrides",
-                ScanVerdict::Suspicious => "Suspicious live FastFlag registry overrides",
-                ScanVerdict::Clean | ScanVerdict::Inconclusive => {
-                    "Live FastFlag registry overrides"
-                }
-            };
-            curated_findings.push(ScanFinding::new(
-                "memory_scanner",
-                exact_verdict.clone(),
-                description,
-                Some(detected_flag_detail_group(
-                    &exact_flags,
-                    "resolved Roblox FastFlag hash table via bare-key bucket walk and read the live value storage used by memory injectors",
-                )),
-            ));
-        }
+        if !detected.is_empty() {
+            // Sort for stable presentation: by source priority (rule before
+            // baseline before tracker) then by name. Operators reviewing the
+            // expanded list see the highest-confidence rows first.
+            detected.sort_by(|a, b| {
+                let prio = |s: &str| match s {
+                    "cheat-rule" => 0,
+                    "baseline" => 1,
+                    "tracker" => 2,
+                    _ => 3,
+                };
+                prio(a.source)
+                    .cmp(&prio(b.source))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
 
-        if !curated_findings.is_empty() {
-            return curated_findings;
+            // Per-flag bullet lines in the format the frontend's
+            // `splitMemoryFlagChunks` parser already understands: one
+            // `- Name = Value` line per row. Keeping the value field
+            // compact (just the observed value, no parenthetical metadata)
+            // so the value column doesn't truncate against its 180px cap.
+            // The vanilla / source breakdown lives in the separate
+            // `Sources` field below.
+            let flag_lines: String = detected
+                .iter()
+                .map(|d| format!("- {} = {}", d.name, d.observed))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // Per-flag annotation list paired by index with the bullet
+            // lines above — what was vanilla, which curation lane caught
+            // it. Rendered as a single field so the frontend can show it
+            // as a note under the accordion.
+            let annotations: String = detected
+                .iter()
+                .map(|d| format!("{} (vanilla {}, via {})", d.name, d.expected, d.source))
+                .collect::<Vec<_>>()
+                .join("; ");
+
+            let rule_count = detected.iter().filter(|d| d.source == "cheat-rule").count();
+            let baseline_count = detected.iter().filter(|d| d.source == "baseline").count();
+            let tracker_count = detected.iter().filter(|d| d.source == "tracker").count();
+
+            let verdict = if detected
+                .iter()
+                .any(|d| matches!(d.verdict, ScanVerdict::Flagged))
+            {
+                ScanVerdict::Flagged
+            } else if detected
+                .iter()
+                .any(|d| matches!(d.verdict, ScanVerdict::Suspicious))
+            {
+                ScanVerdict::Suspicious
+            } else {
+                ScanVerdict::Clean
+            };
+
+            let description = format!(
+                "{}: {} flag(s) detected",
+                match verdict {
+                    ScanVerdict::Flagged => "Live FastFlag registry injection",
+                    ScanVerdict::Suspicious => "Suspicious live FastFlag registry deviation",
+                    ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                        "Live FastFlag registry diagnostic"
+                    }
+                },
+                detected.len()
+            );
+
+            let details = format!(
+                "PID: {} | Singleton candidates: {} | FFlag-shaped entries walked: {} | Entries inspected: {} | Source breakdown: cheat-rule {} / baseline {} / tracker {} | Detected flags: \n{}\n | Per-flag context: {} | Detection: walked the Roblox FastFlag hash table via the bare-key bucket walk, classified each entry back to its developer-facing form, and matched it against curated cheat-value rules (RUNTIME_OVERRIDE_RULES), curated vanilla baselines (RUNTIME_FLAG_BASELINES), and the bundled MaximumADHD/Roblox-FFlag-Tracker public application-settings snapshot. Any singleton-based memory injector that writes through entry+0xC0 leaves this signal regardless of which tool produced the write.",
+                pid,
+                candidates.len(),
+                total_collected,
+                inspected_count,
+                rule_count,
+                baseline_count,
+                tracker_count,
+                flag_lines,
+                annotations,
+            );
+
+            return vec![ScanFinding::new(
+                "memory_scanner",
+                verdict,
+                description,
+                Some(details),
+            )];
         }
 
         // No curated entry triggered a finding. Emit a Clean diagnostic so
@@ -4940,9 +5080,6 @@ mod windows_impl {
         let mut enumerated_summaries = Vec::new();
         let mut resolved_values = Vec::new();
         let mut resolved_seen = HashSet::new();
-        let mut exact_flags = Vec::new();
-        let mut exact_seen = HashSet::new();
-        let mut exact_verdict = ScanVerdict::Clean;
         for candidate in candidates {
             let enumerated_entries =
                 scan_runtime_registry_interesting_entries(handle, candidate.singleton);
@@ -4992,16 +5129,33 @@ mod windows_impl {
                     raw_value,
                     entry_source,
                 );
-                if !runtime_rule_matches_observed(rule, raw_value) {
+                if !runtime_rule_is_live_registry_evidence(rule, raw_value) {
                     continue;
                 }
 
-                let verdict = get_flag_severity(rule.name);
-                max_verdict(&mut exact_verdict, verdict);
-                let flag = format!("{}={}", rule.name, runtime_value_label(rule.value));
-                if exact_seen.insert(flag.clone()) {
-                    exact_flags.push(flag);
-                }
+                let verdict = live_registry_rule_verdict(rule.name, raw_value);
+                let label = match verdict {
+                    ScanVerdict::Flagged => "Critical live FastFlag registry override",
+                    ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
+                    ScanVerdict::Clean | ScanVerdict::Inconclusive => {
+                        "Live FastFlag registry override"
+                    }
+                };
+                findings.push(ScanFinding::new(
+                    "memory_scanner",
+                    verdict,
+                    format!(
+                        "{}: \"{}\" = {}",
+                        label,
+                        rule.name,
+                        runtime_value_label(rule.value)
+                    ),
+                    Some(detected_flag_detail(
+                        rule.name,
+                        &runtime_value_label(rule.value),
+                        "resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
+                    )),
+                ));
             }
             findings.extend(inspect_runtime_flag_baselines_for_candidate(
                 handle,
@@ -5010,26 +5164,6 @@ mod windows_impl {
                 &enumerated_entries,
                 &mut resolved_values,
                 &mut resolved_seen,
-            ));
-        }
-
-        if !exact_flags.is_empty() {
-            exact_flags.sort_unstable();
-            let description = match exact_verdict {
-                ScanVerdict::Flagged => "Critical live FastFlag registry overrides",
-                ScanVerdict::Suspicious => "Suspicious live FastFlag registry overrides",
-                ScanVerdict::Clean | ScanVerdict::Inconclusive => {
-                    "Live FastFlag registry overrides"
-                }
-            };
-            findings.push(ScanFinding::new(
-                "memory_scanner",
-                exact_verdict.clone(),
-                description,
-                Some(detected_flag_detail_group(
-                    &exact_flags,
-                    "resolved Roblox FastFlag hash table with FNV-1a and read the live value storage used by memory injectors",
-                )),
             ));
         }
 
@@ -5461,11 +5595,11 @@ mod windows_impl {
                 .iter()
                 .filter(|rule| rule.name == candidate.name)
             {
-                if !runtime_rule_matches_observed(rule, raw_value) {
+                if !runtime_rule_is_live_registry_evidence(rule, raw_value) {
                     continue;
                 }
 
-                let verdict = get_flag_severity(rule.name);
+                let verdict = live_registry_rule_verdict(rule.name, raw_value);
                 let label = match verdict {
                     ScanVerdict::Flagged => "Critical live FastFlag registry override",
                     ScanVerdict::Suspicious => "Suspicious live FastFlag registry override",
@@ -5989,12 +6123,39 @@ mod windows_impl {
         {
             let _ = anchor_diag;
         }
+        // When the bare-key bridge produces its aggregated FFlag-injection
+        // summary, the legacy per-flag emits from the other paths (curated
+        // registry path, anchor path, RenderConfig path) become duplicate
+        // detections of the same flags the bridge already aggregated. We
+        // want operators to see exactly one FFlag-injection finding — the
+        // expandable summary — so we suppress those legacy per-flag rows
+        // when the bridge has emitted.
+        let bridge_aggregated = generic_singleton_findings.iter().any(|f| {
+            f.description
+                .starts_with("Live FastFlag registry injection:")
+                || f.description
+                    .starts_with("Suspicious live FastFlag registry deviation:")
+        });
+        let is_legacy_per_flag_emit = |f: &ScanFinding| -> bool {
+            f.description
+                .starts_with("Critical live FastFlag registry override:")
+                || f.description
+                    .starts_with("Suspicious live FastFlag registry override:")
+                || f.description
+                    .starts_with("Live FastFlag registry override:")
+                || f.description
+                    .starts_with("Live FastFlag deviates from baseline:")
+        };
+
         for finding in registry_findings
             .into_iter()
             .chain(generic_singleton_findings)
             .chain(node_findings)
             .chain(anchor_findings)
         {
+            if bridge_aggregated && is_legacy_per_flag_emit(&finding) {
+                continue;
+            }
             if matches!(
                 finding.verdict,
                 ScanVerdict::Flagged | ScanVerdict::Suspicious
@@ -7778,6 +7939,160 @@ mod tests {
         assert!(!runtime_rule_matches_observed(rule, 0i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, 2i32.to_le_bytes()));
         assert!(!runtime_rule_matches_observed(rule, (-1i32).to_le_bytes()));
+    }
+
+    #[test]
+    fn clean_live_registry_rollout_values_are_not_injection_evidence() {
+        for (name, value) in [
+            ("DFIntActionStationDebounceTime", 0),
+            ("DFIntClientPacketMaxDelayMs", 0),
+            ("DFIntCodecMaxIncomingPackets", 100),
+            ("DFIntCodecMaxOutgoingFrames", 10_000),
+            ("DFIntDebugDynamicRenderKiloPixels", 2_000),
+            ("DFIntLargePacketQueueSizeCutoffMB", 1_000),
+            ("DFIntMaxDataPacketPerSend", 100_000),
+            ("DFIntMaxProcessPacketsJobScaling", 10_000),
+            ("DFIntMaxProcessPacketsStepsAccumulated", 0),
+            ("DFIntMaxProcessPacketsStepsPerCyclic", 5_000),
+            ("DFIntRakNetLoopMs", 1),
+            ("DFIntRakNetNakResendDelayMs", 1),
+            ("DFIntRakNetNakResendDelayMsMax", 1),
+            ("DFIntRakNetPingFrequencyMillisecond", 1),
+            ("DFIntRenderingThrottleDelayInMS", 1),
+            ("DFIntSecondsBetweenDynamicVariableReloading", 9_999),
+            ("DFIntSimTouchDebounceEntryLimit", 32),
+            ("FIntActivatedCountTimerMSKeyboard", 0),
+            ("FIntActivatedCountTimerMSMouse", 0),
+        ] {
+            let raw = (value as i32).to_le_bytes();
+            assert!(
+                is_roblox_managed_live_registry_value(name, raw),
+                "{}={} should be treated as Roblox-managed live state",
+                name,
+                value
+            );
+            for &rule in RUNTIME_OVERRIDE_RULES
+                .iter()
+                .filter(|rule| rule.name == name)
+            {
+                if runtime_rule_matches_observed(rule, raw) {
+                    assert!(
+                        !runtime_rule_is_live_registry_evidence(rule, raw),
+                        "{}={} must not be singleton-walk injection proof",
+                        name,
+                        value
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tracker_known_live_registry_values_use_tracker_baseline() {
+        for (name, value) in [
+            ("DFIntS2PhysicsSenderRate", 30),
+            ("DFIntRaknetBandwidthInfluxHundredthsPercentageV2", 10_000),
+            ("DFIntRaknetBandwidthPingSendEveryXSeconds", 1),
+            ("DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds", 0),
+            ("DFIntSimTimestepMultiplierDebounceCount", 0),
+            ("DFIntWaitOnRecvFromLoopEndedMS", 1),
+            ("DFIntWaitOnUpdateNetworkLoopEndedMS", 10),
+            ("FIntCLI20390_2", 0),
+        ] {
+            let raw = (value as i32).to_le_bytes();
+            assert!(
+                tracker_baseline_for_name(name).is_some(),
+                "{} must be governed by the tracker snapshot",
+                name
+            );
+            assert!(
+                !is_roblox_managed_live_registry_value(name, raw),
+                "{}={} should be compared against tracker, not suppressed",
+                name,
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn exact_rules_without_severity_use_tracker_or_curated_baseline_verdict() {
+        let cli_rule = RUNTIME_OVERRIDE_RULES
+            .iter()
+            .find(|rule| rule.name == "FIntCLI20390_2")
+            .copied()
+            .expect("test requires CLI exact rule");
+        let cli_raw = 0i32.to_le_bytes();
+        assert!(runtime_rule_is_live_registry_evidence(cli_rule, cli_raw));
+        assert_eq!(
+            live_registry_rule_verdict(cli_rule.name, cli_raw),
+            ScanVerdict::Suspicious
+        );
+
+        let screenshot_rule = RUNTIME_OVERRIDE_RULES
+            .iter()
+            .find(|rule| rule.name == "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds")
+            .copied()
+            .expect("test requires screenshot exact rule");
+        let screenshot_raw = 0i32.to_le_bytes();
+        assert!(runtime_rule_is_live_registry_evidence(
+            screenshot_rule,
+            screenshot_raw
+        ));
+        assert_eq!(
+            live_registry_rule_verdict(screenshot_rule.name, screenshot_raw),
+            ScanVerdict::Flagged
+        );
+        assert_eq!(live_registry_expected_label("FIntCLI20390_2"), "16");
+        assert_eq!(
+            live_registry_expected_label(
+                "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds"
+            ),
+            "1000"
+        );
+    }
+
+    #[test]
+    fn clean_live_registry_ugc_limits_are_not_injection_evidence() {
+        for name in [
+            "DFIntUGCValidateArmXMaxNormal",
+            "DFIntUGCValidateFullBodyZMaxSlender",
+            "DFIntUGCValidateHeadYMinClassic",
+            "DFIntUGCValidateLegZMinNormal",
+            "DFIntUGCValidateTorsoZMinSlender",
+            "DFIntUGCValidateTriangleLimitDynamicHead",
+        ] {
+            let raw = i32::MAX.to_le_bytes();
+            assert!(is_roblox_managed_live_registry_value(name, raw));
+            let rule = RUNTIME_OVERRIDE_RULES
+                .iter()
+                .find(|rule| rule.name == name && runtime_rule_matches_observed(**rule, raw))
+                .expect("test must cover a curated UGC exact-value rule");
+            assert!(!runtime_rule_is_live_registry_evidence(*rule, raw));
+        }
+
+        for name in [
+            "DFFlagUGCValidateLegYMaxClassic",
+            "DFFlagUGCValidateLegYMaxNormal",
+        ] {
+            let raw = 1i32.to_le_bytes();
+            assert!(is_roblox_managed_live_registry_value(name, raw));
+            let rule = RUNTIME_OVERRIDE_RULES
+                .iter()
+                .find(|rule| rule.name == name && runtime_rule_matches_observed(**rule, raw))
+                .expect("test must cover a curated UGC bool rule");
+            assert!(!runtime_rule_is_live_registry_evidence(*rule, raw));
+        }
+    }
+
+    #[test]
+    fn distinctive_live_registry_cheat_values_still_emit() {
+        let rule = RuntimeOverrideRule {
+            name: "DFIntS2PhysicsSenderRate",
+            value: RuntimeFlagValue::Int(-30),
+            string_scan_promote: true,
+        };
+        let raw = (-30i32).to_le_bytes();
+        assert!(runtime_rule_is_live_registry_evidence(rule, raw));
     }
 
     #[test]
