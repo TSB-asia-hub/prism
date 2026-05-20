@@ -206,22 +206,61 @@ jobs:
           & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $mainExe
           & $signtool.FullName verify /pa /v $mainExe
 
+      - name: Resolve macOS signing mode
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_SECRET: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD_SECRET: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_SECRET: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER_SECRET: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH_SECRET: ${{ secrets.APPLE_API_KEY_PATH }}
+        run: |
+          set -euo pipefail
+
+          write_env() {
+            local name="$1"
+            local value="$2"
+            if [ -n "$value" ]; then
+              {
+                echo "$name<<__PRISM_ENV__"
+                printf '%s\n' "$value"
+                echo "__PRISM_ENV__"
+              } >> "$GITHUB_ENV"
+            fi
+          }
+
+          if [ -n "${APPLE_CERTIFICATE_SECRET}" ] && \
+             [ -n "${APPLE_CERTIFICATE_PASSWORD_SECRET}" ] && \
+             [ -n "${APPLE_SIGNING_IDENTITY_SECRET}" ]; then
+            cert_path="$RUNNER_TEMP/apple-certificate.p12"
+            if printf '%s' "$APPLE_CERTIFICATE_SECRET" | base64 --decode > "$cert_path" && \
+               openssl pkcs12 -in "$cert_path" -passin "pass:${APPLE_CERTIFICATE_PASSWORD_SECRET}" -nokeys -clcerts -nodes -noout >/dev/null 2>&1; then
+              echo "Using Developer ID macOS signing certificate from secrets."
+              write_env APPLE_CERTIFICATE "$APPLE_CERTIFICATE_SECRET"
+              write_env APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD_SECRET"
+              write_env APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY_SECRET"
+              write_env APPLE_ID "$APPLE_ID_SECRET"
+              write_env APPLE_PASSWORD "$APPLE_PASSWORD_SECRET"
+              write_env APPLE_TEAM_ID "$APPLE_TEAM_ID_SECRET"
+              write_env APPLE_API_KEY "$APPLE_API_KEY_SECRET"
+              write_env APPLE_API_ISSUER "$APPLE_API_ISSUER_SECRET"
+              write_env APPLE_API_KEY_PATH "$APPLE_API_KEY_PATH_SECRET"
+            else
+              echo "::warning::APPLE_CERTIFICATE secrets are present but not a valid base64 PKCS#12 for the configured password; falling back to ad-hoc signing."
+              echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "Apple Developer signing secrets are incomplete; falling back to ad-hoc signing."
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
       - name: macOS bundle build (.app)
         if: startsWith(matrix.os, 'macos')
-        env:
-          # If Apple Developer secrets are configured, Tauri imports the
-          # certificate, signs with Developer ID, notarizes, and staples the
-          # app. Otherwise we fall back to ad-hoc signing so Apple Silicon
-          # builds still have a runnable local code signature.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
         run: npm run tauri -- build --target ${{ matrix.target }} --bundles app
 
       - name: Package macOS DMG
