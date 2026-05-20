@@ -218,13 +218,11 @@ fn check_flat_json_flags(
                 ));
             }
             ScanVerdict::Clean => {
-                // LOW-tier documented flags and truly-unknown flag-shaped
-                // keys are NOT Suspicious. LOW is by definition benign (the
-                // severity enum returned Clean for them). Unknown keys may
-                // be Roblox flags added after this scanner's data snapshot
-                // — the user is punished for the scanner's age if we call
-                // them Suspicious. v0.4.10 demoted the memory-scanner
-                // summary to Clean; do the same here for parity.
+                // LOW-tier documented flags remain informational, but
+                // unrecognized FFlag-shaped overrides are now Suspicious:
+                // an unknown explicit override in a user/bootstrapper config
+                // needs operator review even if our local rule DB has not
+                // classified the flag yet.
                 if get_flag_category(key).is_some() {
                     findings.push(ScanFinding::new(
                         "client_settings_scanner",
@@ -240,7 +238,7 @@ fn check_flat_json_flags(
                 } else {
                     findings.push(ScanFinding::new(
                         "client_settings_scanner",
-                        ScanVerdict::Clean,
+                        ScanVerdict::Suspicious,
                         format!(
                             "Unrecognized FFlag-shaped override (not in local DB): \"{}\" = {}",
                             key, value
@@ -478,11 +476,10 @@ fn check_bootstrapper_flag_array(
                 ));
             }
             ScanVerdict::Clean => {
-                // Same parity fix as check_flat_json_flags: LOW-tier
-                // documented flags and unrecognized flag-shaped keys do
-                // NOT warrant Suspicious. Emit Clean informational so
-                // operators can see the override existed without the
-                // verdict going yellow.
+                // LOW-tier documented flags remain informational, but
+                // unrecognized FFlag-shaped overrides are Suspicious so
+                // operators review explicit config changes that Prism's
+                // local rule DB cannot classify yet.
                 if get_flag_category(flag_name).is_some() {
                     findings.push(ScanFinding::new(
                         "client_settings_scanner",
@@ -501,7 +498,7 @@ fn check_bootstrapper_flag_array(
                 } else {
                     findings.push(ScanFinding::new(
                         "client_settings_scanner",
-                        ScanVerdict::Clean,
+                        ScanVerdict::Suspicious,
                         format!(
                             "{}: Unrecognized FFlag-shaped override \"{}\" = {}",
                             bootstrapper_name, flag_name, value
@@ -959,6 +956,53 @@ mod tests {
         assert!(
             findings.is_empty(),
             "unrelated launcher metadata must not become a flag finding: {:?}",
+            findings
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unrecognized_fflag_shaped_flat_override_is_suspicious() {
+        let json = r#"{"DFFlagTeleportClientAssetPreloadingV2": true}"#;
+        let dir = tmpdir();
+        let path = dir.join("ClientAppSettings.json");
+
+        let mut findings = Vec::new();
+        check_flat_json_flags(json, &path, &mut findings);
+
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFFlagTeleportClientAssetPreloadingV2")
+            }),
+            "unknown FFlag-shaped flat override must be Suspicious; got: {:?}",
+            findings
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unrecognized_fflag_shaped_bootstrapper_override_is_suspicious() {
+        let dir = tmpdir();
+        let path = dir.join("performance.json");
+        let flags = serde_json::json!([
+            {
+                "flag": "DFFlagTeleportClientAssetPreloadingV2",
+                "enabled": true,
+                "value": true
+            }
+        ]);
+        let flags = flags.as_array().unwrap();
+
+        let mut findings = Vec::new();
+        check_bootstrapper_flag_array(flags, "AppleBlox", &path, &mut findings);
+
+        assert!(
+            findings.iter().any(|f| {
+                matches!(f.verdict, ScanVerdict::Suspicious)
+                    && f.description.contains("DFFlagTeleportClientAssetPreloadingV2")
+            }),
+            "unknown AppleBlox FFlag-shaped override must be Suspicious; got: {:?}",
             findings
         );
         std::fs::remove_dir_all(&dir).ok();

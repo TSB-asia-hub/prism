@@ -1626,9 +1626,9 @@ pub async fn scan_with_progress(reporter: ScanProgress) -> Vec<ScanFinding> {
         let _ = reporter; // unused on non-Windows
         vec![ScanFinding::new(
             "memory_scanner",
-            ScanVerdict::Inconclusive,
-            "Memory scan not supported on this platform",
-            Some("Memory scanning is Windows-only in this build — the scan result reflects only process/file/client-settings coverage.".to_string()),
+            ScanVerdict::Clean,
+            "Memory scan not applicable on this platform",
+            Some("macOS/Linux builds do not inspect Roblox process memory; the scan result reflects process/file/client-settings coverage.".to_string()),
         )]
     }
 }

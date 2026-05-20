@@ -64,6 +64,10 @@ jobs:
             runs_on: '"macos-latest"'
             target: aarch64-apple-darwin
             asset_suffix: 'macos-aarch64.dmg'
+          - os: macos-latest
+            runs_on: '"macos-latest"'
+            target: x86_64-apple-darwin
+            asset_suffix: 'macos-x86_64.dmg'
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     steps:
       - name: Checkout
@@ -202,9 +206,44 @@ jobs:
           & $signtool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $mainExe
           & $signtool.FullName verify /pa /v $mainExe
 
-      - name: macOS bundle build (.app + .dmg)
+      - name: macOS bundle build (.app)
         if: startsWith(matrix.os, 'macos')
-        run: npm run tauri -- build --target ${{ matrix.target }} --bundles app,dmg
+        env:
+          # Ad-hoc sign GitHub-built macOS apps when no Developer ID certificate
+          # is configured. Apple Silicon requires a valid code signature even
+          # for local/unsigned distribution; notarization can be layered on via
+          # APPLE_* secrets later.
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles app
+
+      - name: Package macOS DMG
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/${TARGET}/release/bundle/macos/Prism.app"
+          if [ ! -d "$app" ]; then
+            echo "Build output not found: $app" >&2
+            exit 1
+          fi
+
+          dmg_dir="src-tauri/target/${TARGET}/release/bundle/dmg"
+          stage="$RUNNER_TEMP/prism-dmg-${TARGET}"
+          rm -rf "$dmg_dir" "$stage"
+          mkdir -p "$dmg_dir" "$stage"
+          cp -R "$app" "$stage/Prism.app"
+          ln -s /Applications "$stage/Applications"
+
+          dmg="$dmg_dir/Prism_${TARGET}.dmg"
+          hdiutil create \
+            -volname "Prism" \
+            -srcfolder "$stage" \
+            -ov \
+            -format UDZO \
+            "$dmg"
+          hdiutil verify "$dmg"
 
       - name: Stage release asset (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
@@ -236,9 +275,9 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir -p release-assets
-          src=$(ls "src-tauri/target/${TARGET}/release/bundle/dmg/"*.dmg 2>/dev/null | head -n 1)
-          if [ -z "$src" ]; then
-            echo "Build output not found under release/bundle/dmg/" >&2
+          src="src-tauri/target/${TARGET}/release/bundle/dmg/Prism_${TARGET}.dmg"
+          if [ ! -f "$src" ]; then
+            echo "Build output not found: $src" >&2
             ls -la "src-tauri/target/${TARGET}/release/bundle/" || true
             exit 1
           fi

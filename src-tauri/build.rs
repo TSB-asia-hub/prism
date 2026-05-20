@@ -64,7 +64,7 @@ fn main() {
         let win_attrs = tauri_build::WindowsAttributes::new().app_manifest(manifest);
         let attrs = tauri_build::Attributes::new().windows_attributes(win_attrs);
         if let Err(e) = tauri_build::try_build(attrs) {
-            panic!("tauri_build::try_build failed: {}", e);
+            panic!("tauri_build::try_build failed: {:#}", e);
         }
     }
 }

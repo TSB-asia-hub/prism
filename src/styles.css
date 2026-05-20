@@ -542,6 +542,7 @@ button {
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   z-index: 2;
+  overflow-x: auto;
 }
 
 .filters__group {
@@ -549,6 +550,7 @@ button {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 .filters__label {
@@ -588,6 +590,7 @@ button {
 .filter-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   height: 22px;
   padding: 0 8px;
@@ -595,9 +598,12 @@ button {
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 10.5px;
+  line-height: 1;
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex: 0 0 auto;
   cursor: pointer;
   transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
