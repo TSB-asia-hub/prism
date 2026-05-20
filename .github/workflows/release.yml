@@ -209,11 +209,19 @@ jobs:
       - name: macOS bundle build (.app)
         if: startsWith(matrix.os, 'macos')
         env:
-          # Ad-hoc sign GitHub-built macOS apps when no Developer ID certificate
-          # is configured. Apple Silicon requires a valid code signature even
-          # for local/unsigned distribution; notarization can be layered on via
-          # APPLE_* secrets later.
-          APPLE_SIGNING_IDENTITY: "-"
+          # If Apple Developer secrets are configured, Tauri imports the
+          # certificate, signs with Developer ID, notarizes, and staples the
+          # app. Otherwise we fall back to ad-hoc signing so Apple Silicon
+          # builds still have a runnable local code signature.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
         run: npm run tauri -- build --target ${{ matrix.target }} --bundles app
 
       - name: Package macOS DMG
