@@ -33,13 +33,6 @@ const MIN_IDENT_BODY_LEN: usize = 3;
 /// enumeration API misbehaves. Roblox typically has far fewer regions.
 const MAX_REGIONS_WALKED: usize = 200_000;
 
-/// Wall-clock safety cap for the entire memory scan. Without this, a stuck
-/// `ReadProcessMemory` on a pathological region (rare, but observed in
-/// field reports) can hang the UI indefinitely with no recovery path. The
-/// cap is treated as a hard coverage failure only when region enumeration
-/// was incomplete or the unread span crosses the material-gap thresholds.
-const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
-
 /// Max per-chunk read (16 MiB). Regions larger than this are chunked with a
 /// replay overlap large enough to preserve injector context and string values
 /// across chunk boundaries.
@@ -1010,80 +1003,376 @@ const RUNTIME_OVERRIDE_RULES: &[RuntimeOverrideRule] = &[
         value: RuntimeFlagValue::Bool(true),
         string_scan_promote: false,
     },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmXMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmYMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateArmZMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyXMinSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyYMinSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMaxSlender",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMinClassic",   value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateFullBodyZMinNormal",    value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMaxNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMaxSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadXMinSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMaxClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadYMinSlender",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMaxClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMaxNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMinClassic",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateHeadZMinNormal",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegXMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegYMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxClassic",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMaxSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMinNormal",         value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateLegZMinSlender",        value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMaxSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoXMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMaxSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoYMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMaxClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMaxNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinClassic",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinNormal",       value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTorsoZMinSlender",      value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTriangleLimitDynamicHead", value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
-    RuntimeOverrideRule { name: "DFIntUGCValidateTriangleLimitLeftLeg",  value: RuntimeFlagValue::Int(2_147_483_647), string_scan_promote: true },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmXMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmXMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmXMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmXMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmYMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmYMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmYMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmYMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmYMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmZMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmZMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmZMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateArmZMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyXMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyYMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyYMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyYMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyYMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyZMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyZMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyZMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyZMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateFullBodyZMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadXMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadXMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadXMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadXMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadXMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadYMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadYMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadYMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadYMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadZMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadZMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadZMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateHeadZMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegXMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegYMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegYMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegYMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegYMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegZMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegZMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegZMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegZMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateLegZMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoXMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoYMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoYMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoYMaxSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoYMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoYMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoZMaxClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoZMaxNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoZMinClassic",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoZMinNormal",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTorsoZMinSlender",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTriangleLimitDynamicHead",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
+    RuntimeOverrideRule {
+        name: "DFIntUGCValidateTriangleLimitLeftLeg",
+        value: RuntimeFlagValue::Int(2_147_483_647),
+        string_scan_promote: true,
+    },
 ];
 
 /// Aggregated state for high-risk strings that offset-based FFlag injectors
@@ -1579,19 +1868,6 @@ impl MemoryCoverage {
             self.read_failed_bytes
         )
     }
-}
-
-fn timeout_allows_clean_summary(scan_completed: bool, coverage: MemoryCoverage) -> bool {
-    let timeout_gap = coverage.gap_bytes().max(
-        coverage
-            .intended_bytes
-            .saturating_sub(coverage.bytes_scanned.min(coverage.intended_bytes)),
-    );
-
-    scan_completed
-        && coverage.regions_scanned > 0
-        && !coverage.no_successful_reads()
-        && !coverage_gap_is_material(timeout_gap, coverage.intended_bytes)
 }
 
 /// Scan Roblox process memory for runtime FFlag injections.
@@ -2133,7 +2409,6 @@ pub(crate) fn classify_runtime_key(bare_key: &str) -> RuntimeKeyClassification {
     }
 }
 
-
 fn runtime_rule_matches_observed(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
     let observed_int = i32::from_le_bytes(raw_value);
     match rule.value {
@@ -2197,7 +2472,8 @@ fn is_roblox_managed_live_registry_value(name: &str, raw_value: [u8; 4]) -> bool
 }
 
 fn runtime_rule_is_live_registry_evidence(rule: RuntimeOverrideRule, raw_value: [u8; 4]) -> bool {
-    if tracker_baseline_for_name(rule.name).is_some_and(|tracker| tracker.matches_live_i32(raw_value))
+    if tracker_baseline_for_name(rule.name)
+        .is_some_and(|tracker| tracker.matches_live_i32(raw_value))
     {
         return false;
     }
@@ -3611,7 +3887,7 @@ mod windows_impl {
         regions_scanned: &'a AtomicUsize,
         read_failures: &'a AtomicUsize,
         read_failed_bytes: &'a AtomicU64,
-        timed_out: &'a AtomicBool,
+        abort_requested: &'a AtomicBool,
     }
 
     fn mark_region_scanned(counted_region: &mut bool, counters: &ReadCounters<'_>) {
@@ -3674,7 +3950,7 @@ mod windows_impl {
         counters: &ReadCounters<'_>,
         counted_region: &mut bool,
     ) -> u64 {
-        if size == 0 || counters.timed_out.load(Ordering::Relaxed) {
+        if size == 0 || counters.abort_requested.load(Ordering::Relaxed) {
             return 0;
         }
         if let Some(bytes_read) =
@@ -3722,7 +3998,7 @@ mod windows_impl {
             counters,
             counted_region,
         );
-        let right = if right_start < size && !counters.timed_out.load(Ordering::Relaxed) {
+        let right = if right_start < size && !counters.abort_requested.load(Ordering::Relaxed) {
             scan_span_adaptive(
                 local,
                 scratch,
@@ -3755,7 +4031,7 @@ mod windows_impl {
         regions_scanned: &AtomicUsize,
         read_failures: &AtomicUsize,
         read_failed_bytes: &AtomicU64,
-        timed_out: &AtomicBool,
+        abort_requested: &AtomicBool,
     ) {
         if scratch.capacity() < MAX_CHUNK_BYTES {
             scratch.reserve(MAX_CHUNK_BYTES - scratch.capacity());
@@ -3765,12 +4041,12 @@ mod windows_impl {
             regions_scanned,
             read_failures,
             read_failed_bytes,
-            timed_out,
+            abort_requested,
         };
         let mut counted_region = false;
         let mut offset = 0usize;
         while offset < size {
-            if timed_out.load(Ordering::Relaxed) {
+            if abort_requested.load(Ordering::Relaxed) {
                 return;
             }
             let this_chunk = (size - offset).min(MAX_CHUNK_BYTES);
@@ -4536,8 +4812,7 @@ mod windows_impl {
             return None;
         }
 
-        let len =
-            u64::from_le_bytes(node[layout.len_offset..len_end].try_into().ok()?) as usize;
+        let len = u64::from_le_bytes(node[layout.len_offset..len_end].try_into().ok()?) as usize;
         if len == 0 || len > MAX_IDENT_BODY_LEN + 16 {
             return None;
         }
@@ -4551,9 +4826,7 @@ mod windows_impl {
         let inline_end = layout.string_offset.checked_add(len)?;
         if inline_end <= node.len() {
             let bytes = &node[layout.string_offset..inline_end];
-            if bytes.iter().all(|&b| is_ident_byte(b))
-                && bytes[0].is_ascii_uppercase()
-            {
+            if bytes.iter().all(|&b| is_ident_byte(b)) && bytes[0].is_ascii_uppercase() {
                 if let Ok(s) = std::str::from_utf8(bytes) {
                     return Some(s.to_string());
                 }
@@ -4656,8 +4929,7 @@ mod windows_impl {
                 }
 
                 for bucket in bucket_buf.chunks_exact(16) {
-                    let first =
-                        u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
+                    let first = u64::from_le_bytes(bucket[0x00..0x08].try_into().unwrap()) as usize;
                     let second =
                         u64::from_le_bytes(bucket[0x08..0x10].try_into().unwrap()) as usize;
                     for (mut current, chain_end) in [(second, first), (first, second)] {
@@ -4669,9 +4941,7 @@ mod windows_impl {
                             if nodes_seen >= RUNTIME_ENUM_MAX_NODES_PER_LAYOUT {
                                 break;
                             }
-                            if current == 0
-                                || current == sentinel
-                                || !visited_nodes.insert(current)
+                            if current == 0 || current == sentinel || !visited_nodes.insert(current)
                             {
                                 break;
                             }
@@ -5701,8 +5971,7 @@ mod windows_impl {
             return findings;
         }
         let handle = ScopedHandle(raw_handle);
-        let scan_started = std::time::Instant::now();
-        let timed_out = Arc::new(AtomicBool::new(false));
+        let abort_requested = Arc::new(AtomicBool::new(false));
 
         // (1) Enumerate loaded modules, flag any outside trusted paths.
         findings.extend(scan_modules_windows(handle.0, pid));
@@ -5728,15 +5997,11 @@ mod windows_impl {
 
             loop {
                 if reporter.is_cancelled() {
-                    // User clicked Stop. Treat the same as a hard time-out
+                    // User clicked Stop. Mark the scan incomplete
                     // (Inconclusive verdict downstream); we don't tear the
                     // worker pool down mid-region because each in-flight
                     // ReadProcessMemory must complete cleanly.
-                    timed_out.store(true, Ordering::Relaxed);
-                    break;
-                }
-                if scan_started.elapsed() >= MAX_SCAN_DURATION {
-                    timed_out.store(true, Ordering::Relaxed);
+                    abort_requested.store(true, Ordering::Relaxed);
                     break;
                 }
                 if regions_walked >= MAX_REGIONS_WALKED {
@@ -5815,22 +6080,21 @@ mod windows_impl {
         let read_failed_bytes = Arc::new(AtomicU64::new(0));
         let shutdown = Arc::new(AtomicBool::new(false));
 
-        // Watchdog + heartbeat: a single thread that both emits periodic
-        // progress events and flips the shared `timed_out` flag when the
-        // wall-clock cap is hit. Workers poll `timed_out` between chunks,
-        // giving a ~1× chunk worst-case abort latency (~500ms on modern HW).
+        // Heartbeat + cancellation bridge: a single thread emits periodic
+        // progress events and flips the shared abort flag when the user
+        // clicks Stop. Workers poll the flag between chunks, giving a ~1×
+        // chunk worst-case abort latency (~500ms on modern HW).
         let hb_bytes = bytes_scanned.clone();
         let hb_regions = regions_scanned.clone();
-        let hb_timeout = timed_out.clone();
+        let hb_abort = abort_requested.clone();
         let hb_shutdown = shutdown.clone();
         let hb_reporter = reporter.clone();
-        let hb_scan_started = scan_started;
         let hb_thread = std::thread::spawn(move || {
             let interval = std::time::Duration::from_millis(400);
             loop {
                 std::thread::park_timeout(interval);
-                if hb_scan_started.elapsed() >= MAX_SCAN_DURATION || hb_reporter.is_cancelled() {
-                    hb_timeout.store(true, Ordering::Relaxed);
+                if hb_reporter.is_cancelled() {
+                    hb_abort.store(true, Ordering::Relaxed);
                     break;
                 }
                 if hb_shutdown.load(Ordering::Relaxed) {
@@ -5855,7 +6119,7 @@ mod windows_impl {
         // the same handle, and `ScopedHandle` only closes after this block.
         let handle_usize = handle.0 as usize;
         let scan_region = |local: &mut FlagHitTable, scratch: &mut Vec<u8>, &(addr, size)| {
-            if !timed_out.load(Ordering::Relaxed) {
+            if !abort_requested.load(Ordering::Relaxed) {
                 scan_region_into(
                     local,
                     scratch,
@@ -5867,7 +6131,7 @@ mod windows_impl {
                     &regions_scanned,
                     &read_failures,
                     &read_failed_bytes,
-                    &timed_out,
+                    &abort_requested,
                 );
             }
         };
@@ -5875,12 +6139,7 @@ mod windows_impl {
             regions_to_scan
                 .par_iter()
                 .fold(
-                    || {
-                        (
-                            FlagHitTable::default(),
-                            Vec::<u8>::new(),
-                        )
-                    },
+                    || (FlagHitTable::default(), Vec::<u8>::new()),
                     |(mut local, mut scratch), region| {
                         scan_region(&mut local, &mut scratch, region);
                         (local, scratch)
@@ -5908,10 +6167,6 @@ mod windows_impl {
             Err(_) => scan_regions_sequential(),
         };
 
-        if scan_started.elapsed() >= MAX_SCAN_DURATION {
-            timed_out.store(true, Ordering::Relaxed);
-        }
-
         // Stop the heartbeat thread. `unpark` wakes it immediately so we
         // don't pay up to 400ms of sleep latency at the end of every scan.
         shutdown.store(true, Ordering::Relaxed);
@@ -5922,14 +6177,14 @@ mod windows_impl {
         let regions_scanned_final = regions_scanned.load(Ordering::Relaxed);
         let read_failures_final = read_failures.load(Ordering::Relaxed);
         let read_failed_bytes_final = read_failed_bytes.load(Ordering::Relaxed);
-        let timed_out_final = timed_out.load(Ordering::Relaxed);
+        let abort_requested_final = abort_requested.load(Ordering::Relaxed);
         // Shadow the names the legacy reporting block below used, so the
         // diff between old and new is minimal.
         let bytes_scanned = bytes_scanned_final;
         let regions_scanned = regions_scanned_final;
         let read_failures = read_failures_final;
         let read_failed_bytes = read_failed_bytes_final;
-        let timed_out = timed_out_final;
+        let abort_requested = abort_requested_final;
         let coverage = MemoryCoverage {
             intended_bytes: intended_scan_bytes,
             bytes_scanned,
@@ -5942,9 +6197,6 @@ mod windows_impl {
         let coverage_details = coverage.details();
         let no_successful_memory_reads = coverage.no_successful_reads();
         let material_coverage_gap = coverage.material_gap();
-        let timed_out_with_acceptable_coverage =
-            timed_out && timeout_allows_clean_summary(scan_completed, coverage);
-
         // Cross-region correlation for binary-value-anchored matches.
         // Each parallel worker can only see its own region's strings, so
         // value-in-one-region + name-in-another never correlates without
@@ -6175,14 +6427,11 @@ mod windows_impl {
         // Honest summary. Environmental / coverage failures are
         // Inconclusive, not Suspicious — slow disks, large processes, and
         // truncated kernel enums are not evidence of cheating.
-        if timed_out && !timed_out_with_acceptable_coverage {
+        if abort_requested {
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Inconclusive,
-                format!(
-                    "Memory scan aborted after {}s wall-clock cap — cannot attest clean state",
-                    MAX_SCAN_DURATION.as_secs()
-                ),
+                "Memory scan cancelled before full coverage — cannot attest clean state",
                 Some(format!(
                     "PID: {}, regions_walked: {}, regions_scanned: {}, bytes_scanned: {} | {}",
                     pid, regions_walked, regions_scanned, bytes_scanned, coverage_details
@@ -6240,36 +6489,20 @@ mod windows_impl {
                 )),
             ));
         } else if table.total_flags() == 0 {
-            let description = if timed_out_with_acceptable_coverage {
-                format!(
-                    "No suspicious FFlags found in Roblox process memory ({}s time budget reached with acceptable coverage)",
-                    MAX_SCAN_DURATION.as_secs()
-                )
-            } else {
-                "No suspicious FFlags found in Roblox process memory".to_string()
-            };
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
-                description,
+                "No suspicious FFlags found in Roblox process memory",
                 Some(format!(
                     "PID: {}, regions_scanned: {}, bytes_scanned: {} | {}",
                     pid, regions_scanned, bytes_scanned, coverage_details
                 )),
             ));
         } else {
-            let description = if timed_out_with_acceptable_coverage {
-                format!(
-                    "Memory scan reached {}s time budget with acceptable coverage",
-                    MAX_SCAN_DURATION.as_secs()
-                )
-            } else {
-                "Memory scan completed with acceptable coverage".to_string()
-            };
             findings.push(ScanFinding::new(
                 "memory_scanner",
                 ScanVerdict::Clean,
-                description,
+                "Memory scan completed with acceptable coverage",
                 Some(format!(
                     "PID: {}, regions_scanned: {} | {}",
                     pid, regions_scanned, coverage_details
@@ -6644,53 +6877,6 @@ mod tests {
 
         assert_eq!(coverage.gap_bytes(), 1_153_433_600);
         assert!(coverage.material_gap());
-    }
-
-    #[test]
-    fn timeout_with_completed_enumeration_and_small_gap_can_stay_clean() {
-        let coverage = MemoryCoverage {
-            intended_bytes: 4_063_125_504,
-            bytes_scanned: 3_749_311_507,
-            regions_scanned: 2884,
-            truncated_regions: 0,
-            truncated_bytes: 0,
-            read_failures: 94_617,
-            read_failed_bytes: 289_886_237,
-        };
-
-        assert!(!coverage.material_gap());
-        assert!(timeout_allows_clean_summary(true, coverage));
-    }
-
-    #[test]
-    fn timeout_before_region_enumeration_completes_is_still_inconclusive() {
-        let coverage = MemoryCoverage {
-            intended_bytes: 4 * 1024 * 1024 * 1024u64,
-            bytes_scanned: 3_900_000_000,
-            regions_scanned: 2884,
-            truncated_regions: 0,
-            truncated_bytes: 0,
-            read_failures: 10,
-            read_failed_bytes: 128 * 1024 * 1024u64,
-        };
-
-        assert!(!timeout_allows_clean_summary(false, coverage));
-    }
-
-    #[test]
-    fn timeout_with_completed_enumeration_but_large_unscanned_gap_is_inconclusive() {
-        let coverage = MemoryCoverage {
-            intended_bytes: 4 * 1024 * 1024 * 1024u64,
-            bytes_scanned: 512 * 1024 * 1024u64,
-            regions_scanned: 512,
-            truncated_regions: 0,
-            truncated_bytes: 0,
-            read_failures: 0,
-            read_failed_bytes: 0,
-        };
-
-        assert!(!coverage.material_gap());
-        assert!(!timeout_allows_clean_summary(true, coverage));
     }
 
     /// Regression guard: Bloxstrap / Fishstrap install Roblox under their
@@ -7993,7 +8179,10 @@ mod tests {
             ("DFIntS2PhysicsSenderRate", 30),
             ("DFIntRaknetBandwidthInfluxHundredthsPercentageV2", 10_000),
             ("DFIntRaknetBandwidthPingSendEveryXSeconds", 1),
-            ("DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds", 0),
+            (
+                "DFIntSafetyServiceScreenshotAMCDebouncePeriodMilliseconds",
+                0,
+            ),
             ("DFIntSimTimestepMultiplierDebounceCount", 0),
             ("DFIntWaitOnRecvFromLoopEndedMS", 1),
             ("DFIntWaitOnUpdateNetworkLoopEndedMS", 10),
@@ -8493,12 +8682,12 @@ mod tests {
     fn fflag_shaped_name_rejects_non_identifier_shapes() {
         // Lowercase first letter, non-identifier bytes, too short, or empty.
         for name in [
-            "fflagLowerCaseBody",            // body starts lower
-            "FFlagBad-Char",                 // hyphen
-            "Aa",                            // too short
-            "",                              // empty
-            "FFlag\0Embedded",               // NUL inside body
-            "1StartsWithDigit",              // first byte not ASCII uppercase
+            "fflagLowerCaseBody", // body starts lower
+            "FFlagBad-Char",      // hyphen
+            "Aa",                 // too short
+            "",                   // empty
+            "FFlag\0Embedded",    // NUL inside body
+            "1StartsWithDigit",   // first byte not ASCII uppercase
         ] {
             assert!(
                 !is_fflag_shaped_name(name),
@@ -8540,7 +8729,10 @@ mod tests {
         // with each FLAG_PREFIXES entry to find the curated CRITICAL match
         // under `DFInt`.
         let c = classify_runtime_key("S2PhysicsSenderRate");
-        assert!(c.is_critical, "physics sender rate must be classified critical");
+        assert!(
+            c.is_critical,
+            "physics sender rate must be classified critical"
+        );
         assert_eq!(c.display_name, "DFIntS2PhysicsSenderRate");
         assert!(!c.is_allowlisted);
     }
@@ -8578,5 +8770,4 @@ mod tests {
         assert!(!c.is_roblox_runtime_overridden);
         assert_eq!(c.display_name, "TotallyMadeUpRuntimeKey9999");
     }
-
 }

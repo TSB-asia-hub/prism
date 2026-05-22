@@ -1250,7 +1250,7 @@ const FindingRow = memo(function FindingRow({
             type="button"
             className="row__folder-btn"
             title={folderAction.title}
-            aria-label="Open containing folder"
+            aria-label="Reveal evidence in folder"
             onClick={handleFolderClick}
             onKeyDown={(e) => e.stopPropagation()}
           >
@@ -1403,7 +1403,7 @@ export function parseMemoryFlagEvidence(finding: Pick<ScanFinding, "module" | "d
   return { flags: uniqueFlags, detection };
 }
 
-function pathFieldAction(finding: ScanFinding): FieldAction | null {
+export function pathFieldAction(finding: ScanFinding): FieldAction | null {
   if (evidenceSurface(finding) !== "files" || !finding.details) {
     return null;
   }
@@ -1414,7 +1414,7 @@ function pathFieldAction(finding: ScanFinding): FieldAction | null {
   if (!field?.value) return null;
   return {
     path: field.value,
-    title: `Open containing folder: ${field.value}`,
+    title: `Reveal evidence in folder: ${field.value}`,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   hasTauriRuntime,
   importBadgeTitle,
   parseFindingDetails,
+  pathFieldAction,
   parseMemoryFlagEvidence,
   relativeTime,
   shortTime,
@@ -180,6 +181,47 @@ describe("App UI helpers", () => {
       fields: [],
       freeform: "contains WriteProcessMemory: but no field",
     });
+  });
+
+  it("creates reveal actions from file evidence paths", () => {
+    expect(
+      pathFieldAction(
+        finding("Suspicious", {
+          module: "file_scanner",
+          details:
+            "Path: C:\\Users\\<user>\\AppData\\Local\\Bloxstrap, Player\\ClientAppSettings.json, Hash: abc123",
+        }),
+      ),
+    ).toEqual({
+      path: "C:\\Users\\<user>\\AppData\\Local\\Bloxstrap, Player\\ClientAppSettings.json",
+      title:
+        "Reveal evidence in folder: C:\\Users\\<user>\\AppData\\Local\\Bloxstrap, Player\\ClientAppSettings.json",
+    });
+  });
+
+  it("creates reveal actions from prefetch evidence paths", () => {
+    expect(
+      pathFieldAction(
+        finding("Suspicious", {
+          module: "prefetch_scanner",
+          details: "Prefetch file: C:\\Windows\\Prefetch\\TOOL.EXE-123.pf, Last modified: today",
+        }),
+      ),
+    ).toEqual({
+      path: "C:\\Windows\\Prefetch\\TOOL.EXE-123.pf",
+      title: "Reveal evidence in folder: C:\\Windows\\Prefetch\\TOOL.EXE-123.pf",
+    });
+  });
+
+  it("does not create folder actions for runtime evidence", () => {
+    expect(
+      pathFieldAction(
+        finding("Flagged", {
+          module: "memory_scanner",
+          details: "Path: C:\\Users\\<user>\\Injected.dll | PID: 1234",
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("formats byte counts across scanner progress units", () => {

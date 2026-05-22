@@ -19,6 +19,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Agent-local instructions
+AGENTS.md
+CLAUDE.md
+
 # Claude Code workspace
 .claude/
 

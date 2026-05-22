@@ -93,8 +93,8 @@ pub async fn validate_report(json: String) -> Result<bool, String> {
 /// supplies is the one the user just chose in the native open dialog.
 #[tauri::command]
 pub async fn import_report(path: String) -> Result<ImportedReport, String> {
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Could not read report file: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Could not read report file: {}", e))?;
     let report: ScanReport =
         serde_json::from_str(&content).map_err(|e| format!("Invalid report JSON: {}", e))?;
     let signature_valid = report.verify();
@@ -111,26 +111,41 @@ pub async fn import_report(path: String) -> Result<ImportedReport, String> {
     })
 }
 
-/// Open the folder containing a file finding. Report details redact the
+/// Reveal the evidence item for a file finding. Report details redact the
 /// username as `<user>`; for this local-only action we resolve that placeholder
-/// back to the current machine's home/profile path before opening.
+/// back to the current machine's home/profile path before opening the file
+/// manager. Existing files are selected in their parent folder when the OS file
+/// manager supports it; directories and stale/missing files fall back to opening
+/// the relevant folder without opening the evidence file itself.
 #[tauri::command]
 pub async fn open_finding_folder(path: String) -> Result<(), String> {
     let resolved = resolve_redacted_user_path(path.trim())?;
-    let target = folder_target(&resolved);
-    if !target.exists() {
-        return Err(format!("Folder does not exist: {}", target.display()));
+    match finding_path_action(&resolved)? {
+        FindingPathAction::RevealItem(target) => reveal_item(&target),
+        FindingPathAction::OpenFolder(target) => open_folder(&target),
     }
-    open_folder(&target)
 }
 
-fn folder_target(path: &Path) -> PathBuf {
-    if path.is_dir() {
-        return path.to_path_buf();
+#[derive(Debug, PartialEq, Eq)]
+enum FindingPathAction {
+    RevealItem(PathBuf),
+    OpenFolder(PathBuf),
+}
+
+fn finding_path_action(path: &Path) -> Result<FindingPathAction, String> {
+    if path.is_file() {
+        return Ok(FindingPathAction::RevealItem(path.to_path_buf()));
     }
-    path.parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| path.to_path_buf())
+    if path.is_dir() {
+        return Ok(FindingPathAction::OpenFolder(path.to_path_buf()));
+    }
+    if let Some(parent) = path.parent().filter(|p| p.exists()) {
+        return Ok(FindingPathAction::OpenFolder(parent.to_path_buf()));
+    }
+    Err(format!(
+        "Path and parent folder do not exist: {}",
+        path.display()
+    ))
 }
 
 fn resolve_redacted_user_path(path: &str) -> Result<PathBuf, String> {
@@ -175,6 +190,11 @@ fn redacted_windows_user_prefix(profile: &Path) -> String {
     }
 }
 
+fn reveal_item(path: &Path) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(path)
+        .map_err(|e| format!("Could not reveal evidence file: {}", e))
+}
+
 #[cfg(target_os = "windows")]
 fn open_folder(path: &Path) -> Result<(), String> {
     Command::new("explorer.exe")
@@ -200,4 +220,78 @@ fn open_folder(path: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Could not open folder: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tmpdir() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("prism-command-test-{}", suffix));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn finding_path_action_reveals_existing_file() {
+        let dir = tmpdir();
+        let file = dir.join("ClientAppSettings.json");
+        std::fs::write(&file, "{}").unwrap();
+
+        assert_eq!(
+            finding_path_action(&file).unwrap(),
+            FindingPathAction::RevealItem(file.clone())
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finding_path_action_opens_existing_directory() {
+        let dir = tmpdir();
+
+        assert_eq!(
+            finding_path_action(&dir).unwrap(),
+            FindingPathAction::OpenFolder(dir.clone())
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finding_path_action_opens_parent_for_stale_path() {
+        let dir = tmpdir();
+        let stale_file = dir.join("deleted-fflags.json");
+
+        assert_eq!(
+            finding_path_action(&stale_file).unwrap(),
+            FindingPathAction::OpenFolder(dir.clone())
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finding_path_action_errors_when_path_and_parent_are_missing() {
+        let dir = tmpdir();
+        let missing_parent = dir.join("gone");
+        let missing_file = missing_parent.join("fflags.json");
+        std::fs::remove_dir_all(&dir).ok();
+
+        let err = finding_path_action(&missing_file).unwrap_err();
+        assert!(err.contains("Path and parent folder do not exist"));
+    }
+
+    #[test]
+    fn resolve_redacted_user_path_rejects_empty_paths() {
+        assert_eq!(
+            resolve_redacted_user_path("  \"\"  ").unwrap_err(),
+            "No path supplied"
+        );
+    }
 }
