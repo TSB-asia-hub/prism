@@ -106,7 +106,7 @@ type ImportPayload = {
 
 type Theme = "dark" | "light";
 
-// Read the persisted theme from localStorage. Default to dark on first
+// Read the persisted theme from localStorage. Default to light on first
 // launch (and whenever access is denied — Tauri's webview supports
 // localStorage, but the try/catch keeps this safe under SSR / tests).
 function readInitialTheme(): Theme {
@@ -116,7 +116,7 @@ function readInitialTheme(): Theme {
   } catch {
     /* fall through to default */
   }
-  return "dark";
+  return "light";
 }
 
 function AppInner() {
