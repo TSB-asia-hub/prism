@@ -29,6 +29,7 @@ pub fn run() {
             accounts::link_account,
             accounts::verified_accounts,
             accounts::clear_verified_accounts,
+            accounts::scan_local_accounts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

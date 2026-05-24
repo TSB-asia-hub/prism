@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Emitter;
 
-use crate::accounts::{account_inventory_findings, AccountStore};
+use crate::accounts::{account_inventory, account_inventory_findings, AccountStore};
 use crate::models::{ScanFinding, ScanReport};
 use crate::reports::report_generator;
 use crate::scanners;
@@ -75,9 +75,7 @@ fn with_account_inventory(
     mut findings: Vec<ScanFinding>,
     accounts: &AccountStore,
 ) -> Vec<ScanFinding> {
-    if let Ok(accounts) = accounts.list() {
-        findings.extend(account_inventory_findings(&accounts));
-    }
+    findings.extend(account_inventory_findings(&account_inventory(accounts)));
     findings
 }
 
