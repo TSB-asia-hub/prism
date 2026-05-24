@@ -143,35 +143,26 @@ pub async fn clear_verified_accounts(store: tauri::State<'_, AccountStore>) -> R
     store.clear()
 }
 
-#[tauri::command]
-pub async fn scan_local_accounts(
-    store: tauri::State<'_, AccountStore>,
-) -> Result<Vec<AccountIdentity>, String> {
-    let local_accounts = tokio::task::spawn_blocking(|| {
-        let mut accounts = discover_local_accounts();
-        // Single-shot, best-effort: resolve Roblox numeric IDs to usernames
-        // via the unauthenticated public users API. This is gated behind the
-        // user clicking "Scan local files" so run_scan stays offline — the
-        // Roblox lookup never goes anywhere near auth cookies or session
-        // tokens, it just turns a UserId into a profile name.
-        enrich_roblox_accounts(&mut accounts);
-        accounts
-    })
-    .await
-    .map_err(|e| format!("Local account scan task failed: {}", e))?;
-    store.add_many(local_accounts)?;
-    store.list()
-}
-
 pub fn account_inventory(accounts: &AccountStore) -> Vec<AccountIdentity> {
+    // Pull the stored copy first so previously-resolved usernames act as
+    // an enrichment cache: a fresh-discovered raw entry (username == id)
+    // gets overwritten by its resolved counterpart via upsert_account.
+    // This is what keeps the second `account_inventory` call inside the
+    // same scan (partial → final) from re-hitting users.roblox.com.
     let mut merged = accounts.list().unwrap_or_default();
-    // Folding in freshly-discovered local hints on every run_scan call lets
-    // the inventory reflect newly-added desktop sessions without requiring
-    // the operator to re-click "Scan local files". The store still wins on
-    // ties because enrichment data persists across scans.
     for account in discover_local_accounts() {
         upsert_account(&mut merged, account);
     }
+    // Best-effort, capped: resolve Roblox numeric IDs to usernames via the
+    // unauthenticated public users API. Never touches an auth cookie or a
+    // session token — it just turns a UserId into a profile name. The 30s
+    // deadline inside enrich_roblox_accounts means even a large logged-in
+    // history can't park the scan.
+    enrich_roblox_accounts(&mut merged);
+    // Persist enriched data back to the store so the next call (final
+    // report emit, or another scan in this session) sees the resolved
+    // usernames cached.
+    let _ = accounts.add_many(merged.clone());
     sort_accounts(&mut merged);
     merged
 }
@@ -340,6 +331,23 @@ fn local_account_roots() -> Vec<LocalAccountRoot> {
                 path: roblox_support.join("logs"),
                 label: "Roblox logs",
             });
+            // Native Roblox player on macOS stores account-switcher state
+            // (PreviousAccountsList, per-account UserId/Username/DisplayName)
+            // at ~/Library/Roblox/LocalStorage/appStorage.json. The Electron-
+            // style player's data under ~/Library/Application Support/Roblox/
+            // "Local Storage" (with a space) is LevelDB and intentionally
+            // refused by is_safe_account_hint_file.
+            let roblox_native = home.join("Library").join("Roblox");
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: roblox_native.join("LocalStorage"),
+                label: "Roblox app storage",
+            });
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: roblox_native.join("logs"),
+                label: "Roblox logs",
+            });
             roots.push(LocalAccountRoot {
                 provider: AccountProvider::Roblox,
                 path: roblox_support.join("LocalStorage"),
@@ -348,11 +356,6 @@ fn local_account_roots() -> Vec<LocalAccountRoot> {
             roots.push(LocalAccountRoot {
                 provider: AccountProvider::Roblox,
                 path: home.join("Library").join("Logs").join("Roblox"),
-                label: "Roblox logs",
-            });
-            roots.push(LocalAccountRoot {
-                provider: AccountProvider::Roblox,
-                path: home.join("Library").join("Roblox").join("logs"),
                 label: "Roblox logs",
             });
         }
@@ -833,7 +836,14 @@ fn enrich_roblox_accounts(accounts: &mut [AccountIdentity]) {
     let Ok(client) = enrichment_client() else {
         return;
     };
+    // Overall budget so a large account-switcher history (or a flaky
+    // network) can't park the scanner. Each individual request is also
+    // capped at 6s inside `enrichment_client`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     for idx in needs_enrichment {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         let id = accounts[idx].id.clone();
         let Ok(info) = fetch_roblox_public_user(&client, &id) else {
             continue;
@@ -1000,6 +1010,42 @@ mod tests {
         );
         assert_eq!(by_id["1111111111"].username, "alt_one");
         assert_eq!(by_id["2222222222"].username, "alt_two");
+    }
+
+    #[test]
+    fn roblox_previous_accounts_list_finds_each_logged_in_user() {
+        // Mirrors the actual shape inside ~/Library/Roblox/LocalStorage/appStorage.json
+        // on macOS: a stringified JSON object whose outer keys are user IDs
+        // and whose values carry the canonical userId/username/displayName
+        // triple. Earlier v0.12.0 builds shipped without the
+        // ~/Library/Roblox root path AND without a test pinning this exact
+        // schema, which is why "no logged-in accounts found" reproduced.
+        let content = r#"{
+            "AccountBlob": "",
+            "PreviousAccountsList": "{\"4715965346\":{\"username\":\"EvelynStarRadio\",\"userId\":\"4715965346\",\"displayName\":\"EvelynStarRadio\"},\"8936002538\":{\"username\":\"AltOne\",\"userId\":\"8936002538\",\"displayName\":\"Alt One\"}}"
+        }"#;
+        let mut drafts = Vec::new();
+        collect_local_candidates(
+            &mut drafts,
+            &AccountProvider::Roblox,
+            content,
+            Path::new("/tmp/Roblox/LocalStorage/appStorage.json"),
+            "Roblox app storage",
+            None,
+        );
+        let by_id: std::collections::BTreeMap<_, _> = drafts
+            .into_iter()
+            .map(local_draft_to_account)
+            .map(|a| (a.id.clone(), a))
+            .collect();
+        assert_eq!(by_id.len(), 2);
+        assert_eq!(by_id["4715965346"].username, "EvelynStarRadio");
+        assert_eq!(
+            by_id["4715965346"].display_name.as_deref(),
+            Some("EvelynStarRadio")
+        );
+        assert_eq!(by_id["8936002538"].username, "AltOne");
+        assert_eq!(by_id["8936002538"].display_name.as_deref(), Some("Alt One"));
     }
 
     #[test]

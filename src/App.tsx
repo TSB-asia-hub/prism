@@ -134,7 +134,6 @@ function AppInner() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
   const [accounts, setAccounts] = useState<AccountIdentity[]>([]);
-  const [accountScanInFlight, setAccountScanInFlight] = useState(false);
   const scanInFlight = useRef(false);
   const progressHeartbeatRef = useRef<Record<string, { at: number; bytesScanned: number }>>({});
 
@@ -177,29 +176,6 @@ function AppInner() {
   useEffect(() => {
     if (tauriReady) void refreshAccounts();
   }, [tauriReady, refreshAccounts]);
-
-  const scanLocalAccounts = useCallback(async () => {
-    if (accountScanInFlight) return;
-    if (!hasTauriRuntime()) {
-      setToast({ msg: "Tauri runtime not detected — cannot scan local account files.", kind: "error" });
-      return;
-    }
-    setAccountScanInFlight(true);
-    try {
-      const result = await invoke<AccountIdentity[]>("scan_local_accounts");
-      setAccounts(result);
-      setToast({
-        msg: result.length > 0
-          ? `Found ${result.length} logged-in account${result.length === 1 ? "" : "s"}.`
-          : "No logged-in accounts found in safe log/config files.",
-        kind: "info",
-      });
-    } catch (err) {
-      setToast({ msg: `Local account scan failed: ${String(err)}`, kind: "error" });
-    } finally {
-      setAccountScanInFlight(false);
-    }
-  }, [accountScanInFlight]);
 
   const clearAccounts = useCallback(async () => {
     if (!hasTauriRuntime()) return;
@@ -293,6 +269,12 @@ function AppInner() {
     });
     listen<ScanReport>("scan-report-partial", (event) => {
       setReport(event.payload);
+      // The partial emit lands after the four fast scanners complete, at
+      // which point account_inventory has already discovered + enriched
+      // and written the result into the store. Pulling here lets the
+      // AccountInventory section populate before the memory walk
+      // finishes, instead of waiting for the final report.
+      void refreshAccounts();
     }).then((fn) => {
       if (cancelled) {
         fn();
@@ -305,7 +287,7 @@ function AppInner() {
       if (unlistenProgress) unlistenProgress();
       if (unlistenPartial) unlistenPartial();
     };
-  }, [phase]);
+  }, [phase, refreshAccounts]);
 
   useEffect(() => {
     if (!toast) return;
@@ -342,6 +324,11 @@ function AppInner() {
       const result = await invoke<ScanReport>("run_scan");
       setReport(result);
       setPhase("complete");
+      // run_scan's backend now populates the account store with the
+      // alt-finder result, including Roblox-API-resolved usernames. Pull
+      // the latest copy so the AccountInventory section reflects the
+      // final scan without needing a separate Tauri call from the UI.
+      void refreshAccounts();
     } catch (err) {
       setToast({ msg: `Scan failed: ${String(err)}`, kind: "error" });
       setPhase("idle");
@@ -349,7 +336,7 @@ function AppInner() {
       scanInFlight.current = false;
       setStopInFlight(false);
     }
-  }, []);
+  }, [refreshAccounts]);
 
   const stopScan = useCallback(async () => {
     if (!scanInFlight.current || stopInFlight) return;
@@ -545,8 +532,6 @@ function AppInner() {
       <AccountInventory
         accounts={accounts}
         disabled={!tauriReady || phase === "scanning"}
-        scanInFlight={accountScanInFlight}
-        onScanLocal={scanLocalAccounts}
         onClear={clearAccounts}
       />
       <Workarea
@@ -773,14 +758,10 @@ export function formatAccountLabel(account: Pick<AccountIdentity, "username" | "
 function AccountInventory({
   accounts,
   disabled,
-  scanInFlight,
-  onScanLocal,
   onClear,
 }: {
   accounts: AccountIdentity[];
   disabled: boolean;
-  scanInFlight: boolean;
-  onScanLocal: () => void;
   onClear: () => void;
 }) {
   return (
@@ -791,14 +772,17 @@ function AccountInventory({
           Logged-in Discord / Roblox accounts on this machine
         </span>
         <span className="account-inventory__hint">
-          Reads non-secret app state (Roblox appStorage.json, multi-account switcher entries,
-          recent Discord/Roblox logs) and resolves Roblox IDs against the public users API.
-          Prism does not read browser cookies, Discord tokens, or Roblox session secrets.
+          Populated automatically with each scan. Reads non-secret app state (Roblox
+          appStorage.json multi-account switcher entries, recent Discord/Roblox logs) and
+          resolves Roblox IDs against the public users API. Prism does not read browser
+          cookies, Discord tokens, or Roblox session secrets.
         </span>
       </div>
       <div className="account-inventory__accounts">
         {accounts.length === 0 ? (
-          <span className="account-pill account-pill--empty">No logged-in accounts found</span>
+          <span className="account-pill account-pill--empty">
+            No logged-in accounts found yet — run a scan
+          </span>
         ) : (
           accounts.map((account) => (
             <span
@@ -812,27 +796,18 @@ function AccountInventory({
           ))
         )}
       </div>
-      <div className="account-inventory__actions">
-        <button
-          className="btn btn--ghost"
-          type="button"
-          disabled={disabled || scanInFlight}
-          onClick={onScanLocal}
-          title="Discover Discord/Roblox accounts signed in on this machine from non-secret app state"
-        >
-          {scanInFlight ? "Scanning…" : "Find logged-in accounts"}
-        </button>
-        {accounts.length > 0 && (
+      {accounts.length > 0 && (
+        <div className="account-inventory__actions">
           <button
             className="btn btn--ghost account-inventory__clear"
             type="button"
-            disabled={disabled || scanInFlight}
+            disabled={disabled}
             onClick={onClear}
           >
             Clear
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }
