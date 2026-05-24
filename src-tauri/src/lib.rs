@@ -26,7 +26,6 @@ pub fn run() {
             commands::import_report,
             commands::open_finding_folder,
             commands::cancel_scan,
-            accounts::link_account,
             accounts::verified_accounts,
             accounts::clear_verified_accounts,
             accounts::scan_local_accounts,

@@ -1,23 +1,15 @@
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fmt;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use walkdir::WalkDir;
 
 use crate::models::{ScanFinding, ScanVerdict};
 
-const CALLBACK_HOST: &str = "127.0.0.1";
-const DEFAULT_CALLBACK_PORT: u16 = 53177;
-const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const USER_AGENT: &str = concat!("Prism/", env!("CARGO_PKG_VERSION"), " account-inventory");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -28,14 +20,6 @@ pub enum AccountProvider {
 }
 
 impl AccountProvider {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "discord" => Ok(Self::Discord),
-            "roblox" => Ok(Self::Roblox),
-            other => Err(format!("Unsupported account provider: {}", other)),
-        }
-    }
-
     fn as_str(&self) -> &'static str {
         match self {
             Self::Discord => "discord",
@@ -49,13 +33,6 @@ impl AccountProvider {
             Self::Roblox => "Roblox",
         }
     }
-
-    fn callback_path(&self) -> &'static str {
-        match self {
-            Self::Discord => "/oauth/discord",
-            Self::Roblox => "/oauth/roblox",
-        }
-    }
 }
 
 impl fmt::Display for AccountProvider {
@@ -64,6 +41,10 @@ impl fmt::Display for AccountProvider {
     }
 }
 
+/// Kept as part of the public report schema for backwards compatibility
+/// with already-exported reports. Always empty after the OAuth flow was
+/// removed in v0.12.0 — the alt finder now relies on local non-secret
+/// state, which doesn't expose cross-platform linkings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LinkedAccount {
     pub provider: String,
@@ -89,10 +70,6 @@ pub struct AccountIdentity {
 pub struct AccountStore(Arc<Mutex<Vec<AccountIdentity>>>);
 
 impl AccountStore {
-    pub fn add(&self, account: AccountIdentity) -> Result<(), String> {
-        self.add_many(vec![account])
-    }
-
     pub fn add_many(&self, new_accounts: Vec<AccountIdentity>) -> Result<(), String> {
         let mut accounts = self
             .0
@@ -127,14 +104,16 @@ fn upsert_account(accounts: &mut Vec<AccountIdentity>, account: AccountIdentity)
         .iter_mut()
         .find(|a| a.provider == account.provider && a.id == account.id)
     {
-        // Prefer explicit OAuth records over local-file hints; otherwise use
-        // the newest observation for the same provider/id pair.
-        let existing_is_local = existing.source.starts_with("Local file");
-        let account_is_local = account.source.starts_with("Local file");
-        if !existing_is_local && account_is_local {
+        // Prefer the entry that has a real username over one where username
+        // still equals the numeric ID (which happens when the local-file
+        // walker found an ID but no surrounding name field). Otherwise the
+        // newest observation wins.
+        let existing_resolved = existing.username != existing.id && !existing.username.is_empty();
+        let incoming_resolved = account.username != account.id && !account.username.is_empty();
+        if existing_resolved && !incoming_resolved {
             return;
         }
-        if existing_is_local && !account_is_local || account.verified_at > existing.verified_at {
+        if (incoming_resolved && !existing_resolved) || account.verified_at > existing.verified_at {
             *existing = account;
         }
     } else {
@@ -153,19 +132,6 @@ fn sort_accounts(accounts: &mut [AccountIdentity]) {
 }
 
 #[tauri::command]
-pub async fn link_account(
-    provider: String,
-    store: tauri::State<'_, AccountStore>,
-) -> Result<AccountIdentity, String> {
-    let provider = AccountProvider::parse(&provider)?;
-    let account = tokio::task::spawn_blocking(move || link_account_blocking(provider))
-        .await
-        .map_err(|e| format!("Account-link task failed: {}", e))??;
-    store.add(account.clone())?;
-    Ok(account)
-}
-
-#[tauri::command]
 pub async fn verified_accounts(
     store: tauri::State<'_, AccountStore>,
 ) -> Result<Vec<AccountIdentity>, String> {
@@ -181,15 +147,28 @@ pub async fn clear_verified_accounts(store: tauri::State<'_, AccountStore>) -> R
 pub async fn scan_local_accounts(
     store: tauri::State<'_, AccountStore>,
 ) -> Result<Vec<AccountIdentity>, String> {
-    let local_accounts = tokio::task::spawn_blocking(discover_local_accounts)
-        .await
-        .map_err(|e| format!("Local account scan task failed: {}", e))?;
+    let local_accounts = tokio::task::spawn_blocking(|| {
+        let mut accounts = discover_local_accounts();
+        // Single-shot, best-effort: resolve Roblox numeric IDs to usernames
+        // via the unauthenticated public users API. This is gated behind the
+        // user clicking "Scan local files" so run_scan stays offline — the
+        // Roblox lookup never goes anywhere near auth cookies or session
+        // tokens, it just turns a UserId into a profile name.
+        enrich_roblox_accounts(&mut accounts);
+        accounts
+    })
+    .await
+    .map_err(|e| format!("Local account scan task failed: {}", e))?;
     store.add_many(local_accounts)?;
     store.list()
 }
 
 pub fn account_inventory(accounts: &AccountStore) -> Vec<AccountIdentity> {
     let mut merged = accounts.list().unwrap_or_default();
+    // Folding in freshly-discovered local hints on every run_scan call lets
+    // the inventory reflect newly-added desktop sessions without requiring
+    // the operator to re-click "Scan local files". The store still wins on
+    // ties because enrichment data persists across scans.
     for account in discover_local_accounts() {
         upsert_account(&mut merged, account);
     }
@@ -205,7 +184,7 @@ pub fn account_inventory_findings(accounts: &[AccountIdentity]) -> Vec<ScanFindi
                 format!("Provider: {}", account.provider.label()),
                 format!("Account ID: {}", account.id),
                 format!("Username: {}", account.username),
-                format!("Verified at: {}", account.verified_at.to_rfc3339()),
+                format!("Observed at: {}", account.verified_at.to_rfc3339()),
                 format!("Source: {}", account.source),
             ];
             if let Some(display_name) = account.display_name.as_deref().filter(|s| !s.is_empty()) {
@@ -214,37 +193,12 @@ pub fn account_inventory_findings(accounts: &[AccountIdentity]) -> Vec<ScanFindi
             if let Some(profile_url) = account.profile_url.as_deref().filter(|s| !s.is_empty()) {
                 detail_parts.push(format!("Profile: {}", profile_url));
             }
-            if !account.linked_accounts.is_empty() {
-                let linked = account
-                    .linked_accounts
-                    .iter()
-                    .map(|linked| {
-                        let verified = if linked.verified {
-                            "verified"
-                        } else {
-                            "unverified"
-                        };
-                        format!(
-                            "{}:{} ({}, {})",
-                            linked.provider, linked.id, linked.username, verified
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                detail_parts.push(format!("Linked accounts: {}", linked));
-            }
 
-            let descriptor = if account.source.starts_with("Local file") {
-                "Local account hint"
-            } else {
-                "Verified account"
-            };
             ScanFinding::new(
                 "account_inventory",
                 ScanVerdict::Clean,
                 format!(
-                    "{} — {}: {}",
-                    descriptor,
+                    "Logged-in account — {}: {}",
                     account.provider.label(),
                     account_label(account)
                 ),
@@ -264,28 +218,6 @@ fn account_label(account: &AccountIdentity) -> String {
             format!("{} (@{})", display_name, account.username)
         }
         _ => account.username.clone(),
-    }
-}
-
-fn link_account_blocking(provider: AccountProvider) -> Result<AccountIdentity, String> {
-    let config = OAuthConfig::for_provider(provider.clone())?;
-    let listener = CallbackListener::bind(provider.clone(), &config.redirect_uri)?;
-    tauri_plugin_opener::open_url(&config.auth_url, None::<&str>)
-        .map_err(|e| format!("Could not open {} authorization URL: {}", provider, e))?;
-    let callback = listener.wait()?;
-    if callback.state != config.state {
-        return Err(format!(
-            "{} authorization state mismatch; refusing callback",
-            provider
-        ));
-    }
-    let code = callback
-        .code
-        .ok_or_else(|| format!("{} authorization callback did not include a code", provider))?;
-
-    match provider {
-        AccountProvider::Discord => complete_discord(config, code),
-        AccountProvider::Roblox => complete_roblox(config, code),
     }
 }
 
@@ -339,6 +271,7 @@ pub fn discover_local_accounts() -> Vec<AccountIdentity> {
 const LOCAL_ACCOUNT_FILE_LIMIT_BYTES: usize = 3 * 1024 * 1024;
 const LOCAL_ACCOUNT_MAX_FILES_PER_ROOT: usize = 60;
 const LOCAL_ACCOUNT_SCAN_DEPTH: usize = 4;
+const MAX_NESTED_JSON_DEPTH: usize = 8;
 
 fn local_account_roots() -> Vec<LocalAccountRoot> {
     let mut roots = Vec::new();
@@ -361,10 +294,26 @@ fn local_account_roots() -> Vec<LocalAccountRoot> {
             }
         }
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let local_app_data = PathBuf::from(local_app_data);
             roots.push(LocalAccountRoot {
                 provider: AccountProvider::Roblox,
-                path: PathBuf::from(local_app_data).join("Roblox").join("logs"),
+                path: local_app_data.join("Roblox").join("logs"),
                 label: "Roblox logs",
+            });
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: local_app_data.join("Roblox").join("LocalStorage"),
+                label: "Roblox app storage",
+            });
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: local_app_data.join("Bloxstrap"),
+                label: "Bloxstrap state",
+            });
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: local_app_data.join("Fishstrap"),
+                label: "Fishstrap state",
             });
         }
     }
@@ -385,6 +334,17 @@ fn local_account_roots() -> Vec<LocalAccountRoot> {
                     label: "Discord desktop",
                 });
             }
+            let roblox_support = home.join("Library").join("Application Support").join("Roblox");
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: roblox_support.join("logs"),
+                label: "Roblox logs",
+            });
+            roots.push(LocalAccountRoot {
+                provider: AccountProvider::Roblox,
+                path: roblox_support.join("LocalStorage"),
+                label: "Roblox app storage",
+            });
             roots.push(LocalAccountRoot {
                 provider: AccountProvider::Roblox,
                 path: home.join("Library").join("Logs").join("Roblox"),
@@ -448,10 +408,13 @@ fn recent_safe_files(root: &Path) -> Vec<PathBuf> {
 
 fn is_safe_account_hint_file(path: &Path) -> bool {
     let lower_path = path.to_string_lossy().to_ascii_lowercase();
-    // Explicitly avoid browser/Electron secret-bearing stores. We only scan
-    // human-readable logs/config snapshots where account IDs can appear as
-    // ordinary telemetry context; no cookie DBs, Local Storage LevelDB, or
-    // encrypted credential stores are touched.
+    // Explicitly avoid browser/Electron secret-bearing stores. The alt
+    // finder only reads human-readable logs/config snapshots where account
+    // IDs appear as ordinary telemetry context; no cookie DBs, browser
+    // Local Storage LevelDB (note the space — distinct from Roblox's
+    // `LocalStorage` directory, which is plain JSON), or encrypted
+    // credential stores are touched. If you're tempted to relax this,
+    // re-read CLAUDE.md — Prism ships to players, not just to staff.
     let blocked_parts = [
         "local storage",
         "session storage",
@@ -494,11 +457,12 @@ fn collect_local_candidates(
     modified: Option<SystemTime>,
 ) {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
-        collect_json_candidates(drafts, provider, &value, path, label, modified);
+        collect_json_candidates(drafts, provider, &value, path, label, modified, 0);
     }
     collect_line_candidates(drafts, provider, content, path, label, modified);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_json_candidates(
     drafts: &mut Vec<LocalAccountDraft>,
     provider: &AccountProvider,
@@ -506,14 +470,19 @@ fn collect_json_candidates(
     path: &Path,
     label: &str,
     modified: Option<SystemTime>,
+    depth: usize,
 ) {
     match value {
         serde_json::Value::Object(obj) => {
             if let Some(id) = json_account_id(provider, obj) {
-                let username = json_string_field(obj, &["username", "userName", "name"]);
+                let username = json_string_field(
+                    obj,
+                    &["Username", "username", "userName", "Name", "name"],
+                );
                 let display_name = json_string_field(
                     obj,
                     &[
+                        "DisplayName",
                         "displayName",
                         "display_name",
                         "global_name",
@@ -533,16 +502,45 @@ fn collect_json_candidates(
                 );
             }
             for child in obj.values() {
-                collect_json_candidates(drafts, provider, child, path, label, modified);
+                collect_json_candidates(drafts, provider, child, path, label, modified, depth + 1);
             }
         }
         serde_json::Value::Array(items) => {
             for child in items {
-                collect_json_candidates(drafts, provider, child, path, label, modified);
+                collect_json_candidates(drafts, provider, child, path, label, modified, depth + 1);
+            }
+        }
+        // Roblox's appStorage.json stores per-account state as keys whose
+        // values are stringified JSON blobs (e.g. `LoginUser_<id>` →
+        // `"{\"UserId\":...,\"Username\":\"...\"}"`). Treating strings that
+        // look like JSON as another layer to walk recovers those entries
+        // without a special-case parser.
+        serde_json::Value::String(s) if depth < MAX_NESTED_JSON_DEPTH && looks_like_json(s) => {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                collect_json_candidates(
+                    drafts,
+                    provider,
+                    &parsed,
+                    path,
+                    label,
+                    modified,
+                    depth + 1,
+                );
             }
         }
         _ => {}
     }
+}
+
+fn looks_like_json(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.len() < 2 {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    let first = bytes[0];
+    let last = bytes[bytes.len() - 1];
+    (first == b'{' && last == b'}') || (first == b'[' && last == b']')
 }
 
 fn collect_line_candidates(
@@ -584,8 +582,24 @@ fn json_account_id(
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     let keys: &[&str] = match provider {
-        AccountProvider::Discord => &["id", "user_id", "userId", "currentUserId"],
-        AccountProvider::Roblox => &["userId", "user_id", "userid", "id", "accountId"],
+        AccountProvider::Discord => &[
+            "id",
+            "user_id",
+            "userId",
+            "userID",
+            "currentUserId",
+            "current_user_id",
+        ],
+        AccountProvider::Roblox => &[
+            "UserId",
+            "userId",
+            "user_id",
+            "userid",
+            "Id",
+            "id",
+            "accountId",
+            "AccountId",
+        ],
     };
     for key in keys {
         if let Some(id) = obj.get(*key).and_then(json_value_to_string) {
@@ -796,501 +810,72 @@ fn local_draft_to_account(draft: LocalAccountDraft) -> AccountIdentity {
     }
 }
 
-struct OAuthConfig {
-    provider: AccountProvider,
-    client_id: String,
-    client_secret: Option<String>,
-    redirect_uri: String,
-    state: String,
-    code_verifier: Option<String>,
-    auth_url: String,
-}
-
-impl OAuthConfig {
-    fn for_provider(provider: AccountProvider) -> Result<Self, String> {
-        let client_id = provider_env(&provider, "CLIENT_ID")?;
-        let client_secret = provider_optional_env(&provider, "CLIENT_SECRET");
-        let redirect_uri = redirect_uri(&provider);
-        let state = random_hex_32();
-
-        match provider {
-            AccountProvider::Discord => {
-                if client_secret.as_deref().unwrap_or_default().is_empty() {
-                    return Err(
-                        "Discord OAuth requires PRISM_DISCORD_CLIENT_SECRET or a broker-backed Discord app. Prism will not scrape local Discord tokens/cookies. Register redirect URI: http://127.0.0.1:53177/oauth/discord"
-                            .to_string(),
-                    );
-                }
-                let auth_url = format!(
-                    "https://discord.com/oauth2/authorize?response_type=code&client_id={}&scope={}&state={}&redirect_uri={}&prompt=consent",
-                    encode_query(&client_id),
-                    encode_query("identify connections"),
-                    encode_query(&state),
-                    encode_query(&redirect_uri),
-                );
-                Ok(Self {
-                    provider,
-                    client_id,
-                    client_secret,
-                    redirect_uri,
-                    state,
-                    code_verifier: None,
-                    auth_url,
-                })
-            }
-            AccountProvider::Roblox => {
-                let nonce = random_hex_32();
-                let code_verifier = random_hex_32();
-                let code_challenge = pkce_challenge(&code_verifier);
-                let auth_url = format!(
-                    "https://apis.roblox.com/oauth/v1/authorize?client_id={}&redirect_uri={}&scope={}&response_type=code&state={}&nonce={}&code_challenge={}&code_challenge_method=S256&prompt=select_account",
-                    encode_query(&client_id),
-                    encode_query(&redirect_uri),
-                    encode_query("openid profile"),
-                    encode_query(&state),
-                    encode_query(&nonce),
-                    encode_query(&code_challenge),
-                );
-                Ok(Self {
-                    provider,
-                    client_id,
-                    client_secret,
-                    redirect_uri,
-                    state,
-                    code_verifier: Some(code_verifier),
-                    auth_url,
-                })
-            }
-        }
-    }
-}
-
-fn provider_env(provider: &AccountProvider, suffix: &str) -> Result<String, String> {
-    let key = provider_env_key(provider, suffix);
-    std::env::var(&key)
-        .map(|v| v.trim().to_string())
-        .ok()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{} is not configured. Set {} and register redirect URI {} before linking {} accounts.",
-                key,
-                key,
-                redirect_uri(provider),
-                provider.label()
-            )
-        })
-}
-
-fn provider_optional_env(provider: &AccountProvider, suffix: &str) -> Option<String> {
-    std::env::var(provider_env_key(provider, suffix))
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-fn provider_env_key(provider: &AccountProvider, suffix: &str) -> String {
-    format!(
-        "PRISM_{}_{}",
-        provider.as_str().to_ascii_uppercase(),
-        suffix
-    )
-}
-
-fn redirect_uri(provider: &AccountProvider) -> String {
-    let port = std::env::var("PRISM_OAUTH_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_CALLBACK_PORT);
-    format!(
-        "http://{}:{}{}",
-        CALLBACK_HOST,
-        port,
-        provider.callback_path()
-    )
-}
-
-struct CallbackListener {
-    listener: TcpListener,
-    provider: AccountProvider,
-}
-
-struct OAuthCallback {
-    code: Option<String>,
-    state: String,
-}
-
-impl CallbackListener {
-    fn bind(provider: AccountProvider, redirect_uri: &str) -> Result<Self, String> {
-        let addr = redirect_uri
-            .strip_prefix("http://")
-            .and_then(|rest| rest.split('/').next())
-            .ok_or_else(|| format!("Unsupported redirect URI: {}", redirect_uri))?;
-        let listener = TcpListener::bind(addr).map_err(|e| {
-            format!(
-                "Could not bind OAuth callback listener at {}: {}. Close any existing Prism auth flow or set PRISM_OAUTH_PORT to the registered callback port.",
-                addr, e
-            )
-        })?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|e| format!("Could not configure OAuth callback listener: {}", e))?;
-        Ok(Self { listener, provider })
-    }
-
-    fn wait(self) -> Result<OAuthCallback, String> {
-        let deadline = Instant::now() + CALLBACK_TIMEOUT;
-        loop {
-            match self.listener.accept() {
-                Ok((mut stream, _)) => {
-                    let mut buf = [0u8; 8192];
-                    let n = stream
-                        .read(&mut buf)
-                        .map_err(|e| format!("Could not read OAuth callback: {}", e))?;
-                    let request = String::from_utf8_lossy(&buf[..n]);
-                    let first_line = request.lines().next().unwrap_or_default();
-                    let result = parse_callback_request(first_line, &self.provider);
-                    let body = callback_html(&result, &self.provider);
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(), body
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                    return result;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(format!(
-                            "Timed out waiting for {} authorization callback",
-                            self.provider
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(150));
-                }
-                Err(e) => {
-                    return Err(format!("OAuth callback listener failed: {}", e));
-                }
-            }
-        }
-    }
-}
-
-fn parse_callback_request(
-    first_line: &str,
-    provider: &AccountProvider,
-) -> Result<OAuthCallback, String> {
-    let mut parts = first_line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let target = parts.next().unwrap_or_default();
-    if method != "GET" || target.is_empty() {
-        return Err("OAuth callback was not a GET request".to_string());
-    }
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path != provider.callback_path() {
-        return Err(format!(
-            "Unexpected OAuth callback path: {} (expected {})",
-            path,
-            provider.callback_path()
-        ));
-    }
-    let params = parse_query(query);
-    if let Some(error) = params.get("error") {
-        return Err(format!(
-            "{} authorization failed: {}{}",
-            provider,
-            error,
-            params
-                .get("error_description")
-                .map(|d| format!(" ({})", d))
-                .unwrap_or_default()
-        ));
-    }
-    let state = params
-        .get("state")
-        .cloned()
-        .ok_or_else(|| "OAuth callback omitted state".to_string())?;
-    Ok(OAuthCallback {
-        code: params.get("code").cloned(),
-        state,
-    })
-}
-
-fn callback_html(result: &Result<OAuthCallback, String>, provider: &AccountProvider) -> String {
-    let (title, message) = match result {
-        Ok(_) => (
-            format!("{} linked", provider),
-            "Authorization received. You can return to Prism.".to_string(),
-        ),
-        Err(err) => (format!("{} link failed", provider), err.clone()),
-    };
-    format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>{}</title><body style=\"font-family: system-ui; padding: 2rem;\"><h1>{}</h1><p>{}</p></body>",
-        html_escape(&title),
-        html_escape(&title),
-        html_escape(&message)
-    )
-}
-
-fn parse_query(query: &str) -> HashMap<String, String> {
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .filter_map(|pair| {
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Some((decode_query(key)?, decode_query(value)?))
-        })
-        .collect()
-}
-
-fn decode_query(value: &str) -> Option<String> {
-    urlencoding::decode(value).ok().map(|v| v.into_owned())
-}
-
-fn encode_query(value: &str) -> String {
-    urlencoding::encode(value).into_owned()
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-fn random_hex_32() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-
-    let mut bytes = [0u8; 32];
-    for i in 0..4 {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(i as u64);
-        h.write_u128(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-        );
-        h.write_usize(std::process::id() as usize);
-        let v = h.finish();
-        bytes[i * 8..(i + 1) * 8].copy_from_slice(&v.to_be_bytes());
-    }
-    hex::encode(Sha256::digest(bytes))
-}
-
-fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
 #[derive(Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[allow(dead_code)]
-    refresh_token: Option<String>,
-    #[allow(dead_code)]
-    token_type: Option<String>,
-    #[allow(dead_code)]
-    expires_in: Option<u64>,
-    #[allow(dead_code)]
-    scope: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct DiscordUser {
-    id: String,
-    username: String,
-    global_name: Option<String>,
-    avatar: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct DiscordConnection {
-    id: String,
+struct RobloxPublicUser {
     name: String,
-    #[serde(rename = "type")]
-    kind: String,
-    verified: bool,
+    #[serde(default, rename = "displayName")]
+    display_name: String,
 }
 
-#[derive(Deserialize)]
-struct RobloxUserInfo {
-    sub: String,
-    name: Option<String>,
-    nickname: Option<String>,
-    preferred_username: Option<String>,
-    profile: Option<String>,
-    picture: Option<String>,
-}
-
-fn complete_discord(config: OAuthConfig, code: String) -> Result<AccountIdentity, String> {
-    let secret = config
-        .client_secret
-        .as_deref()
-        .ok_or_else(|| "Discord client secret missing".to_string())?;
-    let client = http_client()?;
-    let token: TokenResponse = post_form_json(
-        &client,
-        "https://discord.com/api/v10/oauth2/token",
-        vec![
-            ("grant_type", "authorization_code".to_string()),
-            ("code", code),
-            ("redirect_uri", config.redirect_uri.clone()),
-            ("client_id", config.client_id.clone()),
-            ("client_secret", secret.to_string()),
-        ],
-    )?;
-    let user: DiscordUser = get_bearer_json(
-        &client,
-        "https://discord.com/api/v10/users/@me",
-        &token.access_token,
-    )?;
-    let connections: Vec<DiscordConnection> = get_bearer_json(
-        &client,
-        "https://discord.com/api/v10/users/@me/connections",
-        &token.access_token,
-    )
-    .unwrap_or_default();
-    let linked_accounts = connections
-        .into_iter()
-        .filter(|connection| connection.kind == "roblox")
-        .map(|connection| LinkedAccount {
-            provider: connection.kind,
-            id: connection.id,
-            username: connection.name,
-            verified: connection.verified,
+fn enrich_roblox_accounts(accounts: &mut [AccountIdentity]) {
+    let needs_enrichment: Vec<usize> = accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, account)| {
+            account.provider == AccountProvider::Roblox
+                && (account.username == account.id || account.username.is_empty())
         })
+        .map(|(idx, _)| idx)
         .collect();
-    let avatar_url = user.avatar.as_ref().map(|hash| {
-        format!(
-            "https://cdn.discordapp.com/avatars/{}/{}.png?size=128",
-            user.id, hash
-        )
-    });
-
-    Ok(AccountIdentity {
-        provider: config.provider,
-        id: user.id,
-        username: user.username,
-        display_name: user.global_name,
-        profile_url: None,
-        avatar_url,
-        verified_at: Utc::now(),
-        source: "Discord OAuth consent (identify connections)".to_string(),
-        linked_accounts,
-    })
-}
-
-fn complete_roblox(config: OAuthConfig, code: String) -> Result<AccountIdentity, String> {
-    let client = http_client()?;
-    let verifier = config
-        .code_verifier
-        .as_deref()
-        .ok_or_else(|| "Roblox PKCE verifier missing".to_string())?;
-    let mut form = vec![
-        ("grant_type", "authorization_code".to_string()),
-        ("code", code),
-        ("redirect_uri", config.redirect_uri.clone()),
-        ("client_id", config.client_id.clone()),
-        ("code_verifier", verifier.to_string()),
-    ];
-    if let Some(secret) = config.client_secret.as_deref() {
-        form.push(("client_secret", secret.to_string()));
+    if needs_enrichment.is_empty() {
+        return;
     }
-    let token: TokenResponse =
-        post_form_json(&client, "https://apis.roblox.com/oauth/v1/token", form)?;
-    let user: RobloxUserInfo = get_bearer_json(
-        &client,
-        "https://apis.roblox.com/oauth/v1/userinfo",
-        &token.access_token,
-    )?;
-    let username = user
-        .preferred_username
-        .clone()
-        .or(user.name.clone())
-        .or(user.nickname.clone())
-        .unwrap_or_else(|| user.sub.clone());
-
-    Ok(AccountIdentity {
-        provider: config.provider,
-        id: user.sub,
-        username,
-        display_name: user.nickname.or(user.name),
-        profile_url: user.profile,
-        avatar_url: user.picture,
-        verified_at: Utc::now(),
-        source: "Roblox OAuth consent (openid profile)".to_string(),
-        linked_accounts: Vec::new(),
-    })
+    let Ok(client) = enrichment_client() else {
+        return;
+    };
+    for idx in needs_enrichment {
+        let id = accounts[idx].id.clone();
+        let Ok(info) = fetch_roblox_public_user(&client, &id) else {
+            continue;
+        };
+        if !info.name.is_empty() {
+            accounts[idx].username = info.name;
+        }
+        if accounts[idx].display_name.is_none() && !info.display_name.is_empty() {
+            accounts[idx].display_name = Some(info.display_name);
+        }
+    }
 }
 
-fn http_client() -> Result<Client, String> {
+fn enrichment_client() -> Result<Client, String> {
     Client::builder()
-        .timeout(Duration::from_secs(30))
+        // Short, capped timeout so a flaky network can't park the
+        // local-files scan. Enrichment is best-effort — if it fails we
+        // still ship raw IDs.
+        .timeout(Duration::from_secs(6))
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| format!("Could not create HTTP client: {}", e))
+        .map_err(|e| format!("Could not create enrichment HTTP client: {}", e))
 }
 
-fn post_form_json<T: for<'de> Deserialize<'de>>(
-    client: &Client,
-    url: &str,
-    form: Vec<(&str, String)>,
-) -> Result<T, String> {
-    let response = client
-        .post(url)
-        .form(&form)
-        .send()
-        .map_err(|e| format!("OAuth token request failed: {}", e))?;
-    parse_json_response(response, "OAuth token request")
-}
-
-fn get_bearer_json<T: for<'de> Deserialize<'de>>(
-    client: &Client,
-    url: &str,
-    access_token: &str,
-) -> Result<T, String> {
+fn fetch_roblox_public_user(client: &Client, id: &str) -> Result<RobloxPublicUser, String> {
+    // Unauthenticated public endpoint — does not require a cookie or any
+    // session token. Returns just { name, displayName, description, ... }
+    // for the supplied numeric ID.
+    let url = format!("https://users.roblox.com/v1/users/{}", id);
     let response = client
         .get(url)
-        .bearer_auth(access_token)
         .send()
-        .map_err(|e| format!("OAuth user-info request failed: {}", e))?;
-    parse_json_response(response, "OAuth user-info request")
-}
-
-fn parse_json_response<T: for<'de> Deserialize<'de>>(
-    response: reqwest::blocking::Response,
-    context: &str,
-) -> Result<T, String> {
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|e| format!("{} returned unreadable response: {}", context, e))?;
-    if !status.is_success() {
+        .map_err(|e| format!("Roblox user lookup failed: {}", e))?;
+    if !response.status().is_success() {
         return Err(format!(
-            "{} failed with HTTP {}: {}",
-            context,
-            status.as_u16(),
-            truncate_body(&body)
+            "Roblox user lookup returned HTTP {}",
+            response.status().as_u16()
         ));
     }
-    serde_json::from_str(&body).map_err(|e| {
-        format!(
-            "{} returned unexpected JSON: {} ({})",
-            context,
-            e,
-            truncate_body(&body)
-        )
-    })
-}
-
-fn truncate_body(body: &str) -> String {
-    const MAX: usize = 700;
-    if body.len() <= MAX {
-        body.to_string()
-    } else {
-        format!("{}…", &body[..MAX])
-    }
+    response
+        .json::<RobloxPublicUser>()
+        .map_err(|e| format!("Roblox user lookup returned unexpected JSON: {}", e))
 }
 
 #[cfg(test)]
@@ -1315,14 +900,29 @@ mod tests {
     fn account_store_dedupes_by_provider_and_id() {
         let store = AccountStore::default();
         store
-            .add(test_account(AccountProvider::Discord, "1", "first"))
+            .add_many(vec![test_account(AccountProvider::Discord, "1", "first")])
             .unwrap();
         store
-            .add(test_account(AccountProvider::Discord, "1", "second"))
+            .add_many(vec![test_account(AccountProvider::Discord, "1", "second")])
             .unwrap();
         let accounts = store.list().unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].username, "second");
+    }
+
+    #[test]
+    fn account_store_prefers_resolved_username_over_numeric_id() {
+        let store = AccountStore::default();
+        let mut numeric = test_account(AccountProvider::Roblox, "1516563360", "1516563360");
+        // Older timestamp than the resolved one — without the resolved-wins
+        // rule the numeric placeholder would survive and the UI would show
+        // a userId where a name should be.
+        numeric.verified_at = "2026-05-24T10:00:00Z".parse().unwrap();
+        store.add_many(vec![numeric]).unwrap();
+        let mut resolved = test_account(AccountProvider::Roblox, "1516563360", "EvPlayer");
+        resolved.verified_at = "2026-05-24T09:00:00Z".parse().unwrap();
+        store.add_many(vec![resolved]).unwrap();
+        assert_eq!(store.list().unwrap()[0].username, "EvPlayer");
     }
 
     #[test]
@@ -1337,7 +937,7 @@ mod tests {
         assert_eq!(findings[0].verdict, ScanVerdict::Clean);
         assert!(findings[0]
             .description
-            .contains("Verified account — Roblox"));
+            .contains("Logged-in account — Roblox"));
         assert!(findings[0]
             .details
             .as_deref()
@@ -1368,6 +968,41 @@ mod tests {
     }
 
     #[test]
+    fn roblox_app_storage_extracts_logged_in_users_from_stringified_json() {
+        // appStorage.json keeps per-account state as values that are themselves
+        // JSON-encoded strings — this regresses if the walker ever stops
+        // recursing into stringified-JSON values.
+        let content = r#"{
+            "BrowserTrackerId": "ignored",
+            "LoginUser_1234567890": "{\"UserId\":1234567890,\"Username\":\"foo\",\"DisplayName\":\"Foo Bar\"}",
+            "MultipleLoginUser": "[{\"UserId\":1111111111,\"Username\":\"alt_one\",\"DisplayName\":\"Alt One\"},{\"UserId\":2222222222,\"Username\":\"alt_two\"}]"
+        }"#;
+        let mut drafts = Vec::new();
+        collect_local_candidates(
+            &mut drafts,
+            &AccountProvider::Roblox,
+            content,
+            Path::new("/tmp/Roblox/LocalStorage/appStorage.json"),
+            "Roblox app storage",
+            None,
+        );
+        let accounts = drafts
+            .into_iter()
+            .map(local_draft_to_account)
+            .collect::<Vec<_>>();
+        let by_id: std::collections::BTreeMap<_, _> =
+            accounts.iter().map(|a| (a.id.clone(), a)).collect();
+        assert_eq!(by_id.len(), 3);
+        assert_eq!(by_id["1234567890"].username, "foo");
+        assert_eq!(
+            by_id["1234567890"].display_name.as_deref(),
+            Some("Foo Bar")
+        );
+        assert_eq!(by_id["1111111111"].username, "alt_one");
+        assert_eq!(by_id["2222222222"].username, "alt_two");
+    }
+
+    #[test]
     fn local_scan_refuses_secret_bearing_storage_paths() {
         assert!(!is_safe_account_hint_file(Path::new(
             "/Users/ev/Library/Application Support/discord/Local Storage/leveldb/000003.log"
@@ -1375,19 +1010,23 @@ mod tests {
         assert!(!is_safe_account_hint_file(Path::new(
             "/Users/ev/Library/Application Support/discord/Cookies"
         )));
+        // Roblox's LocalStorage (no space) is plain JSON and intentionally
+        // allowed — the blocked match is the spaced "Local Storage".
+        assert!(is_safe_account_hint_file(Path::new(
+            "/Users/ev/Library/Application Support/Roblox/LocalStorage/appStorage.json"
+        )));
         assert!(is_safe_account_hint_file(Path::new(
             "/Users/ev/Library/Logs/Roblox/client.log"
         )));
     }
 
     #[test]
-    fn parses_oauth_callback_query() {
-        let parsed = parse_callback_request(
-            "GET /oauth/roblox?code=abc&state=state%201 HTTP/1.1",
-            &AccountProvider::Roblox,
-        )
-        .unwrap();
-        assert_eq!(parsed.code.as_deref(), Some("abc"));
-        assert_eq!(parsed.state, "state 1");
+    fn looks_like_json_only_matches_objects_and_arrays() {
+        assert!(looks_like_json("{\"a\":1}"));
+        assert!(looks_like_json("[1,2,3]"));
+        assert!(looks_like_json("  { \"a\": 1 } "));
+        assert!(!looks_like_json("plain string"));
+        assert!(!looks_like_json("12345"));
+        assert!(!looks_like_json("{ unterminated"));
     }
 }

@@ -14,7 +14,6 @@ type Phase = "idle" | "scanning" | "complete";
 type Filter = "all" | "flagged" | "suspicious" | "inconclusive" | "clean";
 type EvidenceFilter = "all" | "runtime" | "files";
 type EvidenceSurface = "runtime" | "files";
-type AccountAction = AccountProvider | "local";
 
 // Display metadata for each scanner. The `id` is the stable identifier the
 // backend uses in `scan-progress` events — keep in sync with SCANNER_IDS
@@ -135,7 +134,7 @@ function AppInner() {
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
   const [accounts, setAccounts] = useState<AccountIdentity[]>([]);
-  const [accountInFlight, setAccountInFlight] = useState<AccountAction | null>(null);
+  const [accountScanInFlight, setAccountScanInFlight] = useState(false);
   const scanInFlight = useRef(false);
   const progressHeartbeatRef = useRef<Record<string, { at: number; bytesScanned: number }>>({});
 
@@ -179,46 +178,28 @@ function AppInner() {
     if (tauriReady) void refreshAccounts();
   }, [tauriReady, refreshAccounts]);
 
-  const linkAccount = useCallback(async (provider: AccountProvider) => {
-    if (accountInFlight) return;
-    if (!hasTauriRuntime()) {
-      setToast({ msg: "Tauri runtime not detected — cannot verify accounts.", kind: "error" });
-      return;
-    }
-    setAccountInFlight(provider);
-    try {
-      const account = await invoke<AccountIdentity>("link_account", { provider });
-      await refreshAccounts();
-      setToast({ msg: `Verified ${providerLabel(account.provider)} account: ${formatAccountLabel(account)}`, kind: "success" });
-    } catch (err) {
-      setToast({ msg: `Account verification failed: ${String(err)}`, kind: "error" });
-    } finally {
-      setAccountInFlight(null);
-    }
-  }, [accountInFlight, refreshAccounts]);
-
   const scanLocalAccounts = useCallback(async () => {
-    if (accountInFlight) return;
+    if (accountScanInFlight) return;
     if (!hasTauriRuntime()) {
       setToast({ msg: "Tauri runtime not detected — cannot scan local account files.", kind: "error" });
       return;
     }
-    setAccountInFlight("local");
+    setAccountScanInFlight(true);
     try {
       const result = await invoke<AccountIdentity[]>("scan_local_accounts");
       setAccounts(result);
       setToast({
         msg: result.length > 0
-          ? `Found ${result.length} local account hint${result.length === 1 ? "" : "s"}.`
-          : "No local account hints found in safe log/config files.",
+          ? `Found ${result.length} logged-in account${result.length === 1 ? "" : "s"}.`
+          : "No logged-in accounts found in safe log/config files.",
         kind: "info",
       });
     } catch (err) {
       setToast({ msg: `Local account scan failed: ${String(err)}`, kind: "error" });
     } finally {
-      setAccountInFlight(null);
+      setAccountScanInFlight(false);
     }
-  }, [accountInFlight]);
+  }, [accountScanInFlight]);
 
   const clearAccounts = useCallback(async () => {
     if (!hasTauriRuntime()) return;
@@ -564,8 +545,7 @@ function AppInner() {
       <AccountInventory
         accounts={accounts}
         disabled={!tauriReady || phase === "scanning"}
-        inFlight={accountInFlight}
-        onLink={linkAccount}
+        scanInFlight={accountScanInFlight}
         onScanLocal={scanLocalAccounts}
         onClear={clearAccounts}
       />
@@ -793,33 +773,32 @@ export function formatAccountLabel(account: Pick<AccountIdentity, "username" | "
 function AccountInventory({
   accounts,
   disabled,
-  inFlight,
-  onLink,
+  scanInFlight,
   onScanLocal,
   onClear,
 }: {
   accounts: AccountIdentity[];
   disabled: boolean;
-  inFlight: AccountAction | null;
-  onLink: (provider: AccountProvider) => void;
+  scanInFlight: boolean;
   onScanLocal: () => void;
   onClear: () => void;
 }) {
   return (
     <section className="account-inventory" aria-label="Account inventory">
       <div className="account-inventory__copy">
-        <span className="account-inventory__eyebrow">Account inventory</span>
+        <span className="account-inventory__eyebrow">Alt finder</span>
         <span className="account-inventory__title">
-          Discord / Roblox accounts from local files or OAuth
+          Logged-in Discord / Roblox accounts on this machine
         </span>
         <span className="account-inventory__hint">
-          Local scan reads non-secret logs/config only. Prism does not read browser cookies,
-          Discord tokens, or Roblox session secrets.
+          Reads non-secret app state (Roblox appStorage.json, multi-account switcher entries,
+          recent Discord/Roblox logs) and resolves Roblox IDs against the public users API.
+          Prism does not read browser cookies, Discord tokens, or Roblox session secrets.
         </span>
       </div>
       <div className="account-inventory__accounts">
         {accounts.length === 0 ? (
-          <span className="account-pill account-pill--empty">No account hints found</span>
+          <span className="account-pill account-pill--empty">No logged-in accounts found</span>
         ) : (
           accounts.map((account) => (
             <span
@@ -829,11 +808,6 @@ function AccountInventory({
             >
               <span className="account-pill__provider">{providerLabel(account.provider)}</span>
               <span className="account-pill__name">{formatAccountLabel(account)}</span>
-              {account.linked_accounts.length > 0 && (
-                <span className="account-pill__linked">
-                  +{account.linked_accounts.length} linked
-                </span>
-              )}
             </span>
           ))
         )}
@@ -842,35 +816,17 @@ function AccountInventory({
         <button
           className="btn btn--ghost"
           type="button"
-          disabled={disabled || inFlight !== null}
+          disabled={disabled || scanInFlight}
           onClick={onScanLocal}
-          title="Read recent Discord/Roblox logs and safe config files for account IDs/usernames"
+          title="Discover Discord/Roblox accounts signed in on this machine from non-secret app state"
         >
-          {inFlight === "local" ? "Scanning…" : "Scan local files"}
-        </button>
-        <button
-          className="btn btn--ghost"
-          type="button"
-          disabled={disabled || inFlight !== null}
-          onClick={() => onLink("discord")}
-          title="Fallback: open Discord OAuth and add the selected Discord account to this signed report"
-        >
-          {inFlight === "discord" ? "Waiting…" : "OAuth Discord"}
-        </button>
-        <button
-          className="btn btn--ghost"
-          type="button"
-          disabled={disabled || inFlight !== null}
-          onClick={() => onLink("roblox")}
-          title="Fallback: open Roblox OAuth and add the selected Roblox account to this signed report"
-        >
-          {inFlight === "roblox" ? "Waiting…" : "OAuth Roblox"}
+          {scanInFlight ? "Scanning…" : "Find logged-in accounts"}
         </button>
         {accounts.length > 0 && (
           <button
             className="btn btn--ghost account-inventory__clear"
             type="button"
-            disabled={disabled || inFlight !== null}
+            disabled={disabled || scanInFlight}
             onClick={onClear}
           >
             Clear
