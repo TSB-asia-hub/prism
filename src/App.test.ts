@@ -3,6 +3,7 @@ import type { ScanFinding } from "./types";
 import {
   emptyProgress,
   findingKey,
+  formatAccountLabel,
   formatBytes,
   groupByVerdict,
   hasTauriRuntime,
@@ -10,6 +11,7 @@ import {
   parseFindingDetails,
   pathFieldAction,
   parseMemoryFlagEvidence,
+  providerLabel,
   relativeTime,
   shortTime,
   truncate,
@@ -222,6 +224,19 @@ describe("App UI helpers", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("formats verified account labels", () => {
+    expect(providerLabel("discord")).toBe("Discord");
+    expect(
+      formatAccountLabel({ username: "ev", display_name: "Evelyn" }),
+    ).toBe("Evelyn (@ev)");
+    expect(
+      formatAccountLabel({ username: "ev", display_name: "ev" }),
+    ).toBe("ev");
+    expect(
+      formatAccountLabel({ username: "ev", display_name: null }),
+    ).toBe("ev");
   });
 
   it("formats byte counts across scanner progress units", () => {

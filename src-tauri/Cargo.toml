@@ -1,6 +1,6 @@
 [package]
 name = "prism"
-version = "0.9.12"
+version = "0.10.0"
 description = "Prism — tournament integrity tool for Roblox FFlag detection"
 authors = ["TSBCC"]
 edition = "2021"
@@ -32,6 +32,9 @@ ui = [
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
     "dep:tauri-build",
+    "dep:reqwest",
+    "dep:base64",
+    "dep:urlencoding",
 ]
 
 [dependencies]
@@ -53,6 +56,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 aho-corasick = "1"
 memchr = "2"
 rayon = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+base64 = { version = "0.22", optional = true }
+urlencoding = { version = "2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # Microsoft's official bindings, replacing the unmaintained winapi 0.3.

@@ -1,4 +1,6 @@
 #[cfg(feature = "ui")]
+mod accounts;
+#[cfg(feature = "ui")]
 mod commands;
 pub mod data;
 pub mod models;
@@ -16,6 +18,7 @@ pub fn run() {
         // Shared cancellation flag for run_scan / cancel_scan. Stored in
         // state so the cancel command and run_scan see the same Arc.
         .manage(scanners::progress::CancelToken::new())
+        .manage(accounts::AccountStore::default())
         .invoke_handler(tauri::generate_handler![
             commands::run_scan,
             commands::save_report,
@@ -23,6 +26,9 @@ pub fn run() {
             commands::import_report,
             commands::open_finding_folder,
             commands::cancel_scan,
+            accounts::link_account,
+            accounts::verified_accounts,
+            accounts::clear_verified_accounts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

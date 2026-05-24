@@ -2,7 +2,7 @@ import { Component, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as showOpenDialog, save as showSaveDialog } from "@tauri-apps/plugin-dialog";
-import type { ScanFinding, ScanReport, ScanVerdict } from "./types";
+import type { AccountIdentity, AccountProvider, ScanFinding, ScanReport, ScanVerdict } from "./types";
 
 // Version is wired in at build time from package.json by Vite's __APP_VERSION__
 // define (see vite.config.ts); fall back to "?" if the define is missing.
@@ -133,6 +133,8 @@ function AppInner() {
   const [stopInFlight, setStopInFlight] = useState(false);
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
+  const [accounts, setAccounts] = useState<AccountIdentity[]>([]);
+  const [accountInFlight, setAccountInFlight] = useState<AccountProvider | null>(null);
   const scanInFlight = useRef(false);
   const progressHeartbeatRef = useRef<Record<string, { at: number; bytesScanned: number }>>({});
 
@@ -161,6 +163,49 @@ function AppInner() {
     if (tauriReady) return;
     if (hasTauriRuntime()) setTauriReady(true);
   }, [tauriReady]);
+
+  const refreshAccounts = useCallback(async () => {
+    if (!hasTauriRuntime()) return;
+    try {
+      setAccounts(await invoke<AccountIdentity[]>("verified_accounts"));
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Could not load verified accounts:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tauriReady) void refreshAccounts();
+  }, [tauriReady, refreshAccounts]);
+
+  const linkAccount = useCallback(async (provider: AccountProvider) => {
+    if (accountInFlight) return;
+    if (!hasTauriRuntime()) {
+      setToast({ msg: "Tauri runtime not detected — cannot verify accounts.", kind: "error" });
+      return;
+    }
+    setAccountInFlight(provider);
+    try {
+      const account = await invoke<AccountIdentity>("link_account", { provider });
+      await refreshAccounts();
+      setToast({ msg: `Verified ${providerLabel(account.provider)} account: ${formatAccountLabel(account)}`, kind: "success" });
+    } catch (err) {
+      setToast({ msg: `Account verification failed: ${String(err)}`, kind: "error" });
+    } finally {
+      setAccountInFlight(null);
+    }
+  }, [accountInFlight, refreshAccounts]);
+
+  const clearAccounts = useCallback(async () => {
+    if (!hasTauriRuntime()) return;
+    try {
+      await invoke("clear_verified_accounts");
+      setAccounts([]);
+      setToast({ msg: "Cleared verified accounts for this Prism session.", kind: "info" });
+    } catch (err) {
+      setToast({ msg: `Could not clear accounts: ${String(err)}`, kind: "error" });
+    }
+  }, []);
 
   // Subscribe to scan-progress events while a scan is running. Each event
   // mutates the per-scanner state map. Unsubscribe when the phase leaves
@@ -492,6 +537,13 @@ function AppInner() {
         counts={counts}
         progress={progress}
       />
+      <AccountInventory
+        accounts={accounts}
+        disabled={!tauriReady || phase === "scanning"}
+        inFlight={accountInFlight}
+        onLink={linkAccount}
+        onClear={clearAccounts}
+      />
       <Workarea
         phase={phase}
         findings={ordered}
@@ -701,6 +753,96 @@ export function importBadgeTitle(meta: ImportMeta): string {
         : `${Math.round(meta.ageSeconds / 3600)}h old`;
   const stale = meta.stale ? " (exceeds 30m freshness window)" : "";
   return `${sig} · ${age}${stale}\n${meta.sourcePath}`;
+}
+
+export function providerLabel(provider: AccountProvider): string {
+  return provider === "discord" ? "Discord" : "Roblox";
+}
+
+export function formatAccountLabel(account: Pick<AccountIdentity, "username" | "display_name">): string {
+  return account.display_name && account.display_name !== account.username
+    ? `${account.display_name} (@${account.username})`
+    : account.username;
+}
+
+function AccountInventory({
+  accounts,
+  disabled,
+  inFlight,
+  onLink,
+  onClear,
+}: {
+  accounts: AccountIdentity[];
+  disabled: boolean;
+  inFlight: AccountProvider | null;
+  onLink: (provider: AccountProvider) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section className="account-inventory" aria-label="Verified account inventory">
+      <div className="account-inventory__copy">
+        <span className="account-inventory__eyebrow">Account inventory</span>
+        <span className="account-inventory__title">
+          OAuth-verified Discord / Roblox accounts
+        </span>
+        <span className="account-inventory__hint">
+          Lists accounts the player explicitly verifies. Prism does not read browser cookies,
+          Discord tokens, or Roblox session secrets.
+        </span>
+      </div>
+      <div className="account-inventory__accounts">
+        {accounts.length === 0 ? (
+          <span className="account-pill account-pill--empty">No accounts verified</span>
+        ) : (
+          accounts.map((account) => (
+            <span
+              className={`account-pill account-pill--${account.provider}`}
+              key={`${account.provider}-${account.id}`}
+              title={`${providerLabel(account.provider)} ID: ${account.id}\n${account.source}`}
+            >
+              <span className="account-pill__provider">{providerLabel(account.provider)}</span>
+              <span className="account-pill__name">{formatAccountLabel(account)}</span>
+              {account.linked_accounts.length > 0 && (
+                <span className="account-pill__linked">
+                  +{account.linked_accounts.length} linked
+                </span>
+              )}
+            </span>
+          ))
+        )}
+      </div>
+      <div className="account-inventory__actions">
+        <button
+          className="btn btn--ghost"
+          type="button"
+          disabled={disabled || inFlight !== null}
+          onClick={() => onLink("discord")}
+          title="Open Discord OAuth and add the selected Discord account to this signed report"
+        >
+          {inFlight === "discord" ? "Waiting…" : "Verify Discord"}
+        </button>
+        <button
+          className="btn btn--ghost"
+          type="button"
+          disabled={disabled || inFlight !== null}
+          onClick={() => onLink("roblox")}
+          title="Open Roblox OAuth and add the selected Roblox account to this signed report"
+        >
+          {inFlight === "roblox" ? "Waiting…" : "Verify Roblox"}
+        </button>
+        {accounts.length > 0 && (
+          <button
+            className="btn btn--ghost account-inventory__clear"
+            type="button"
+            disabled={disabled || inFlight !== null}
+            onClick={onClear}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    </section>
+  );
 }
 
 /* ——————————————————————————————————————————————————————————— */
@@ -1008,7 +1150,7 @@ function Workarea({
             Run scan
           </button>
           <span className="empty__hint">
-            Inspects processes · files · settings · prefetch · memory
+            Inspects accounts · processes · files · settings · prefetch · memory
           </span>
         </div>
       )}
@@ -1069,7 +1211,9 @@ function Workarea({
 // The input arrives sorted by surface, then verdict, so this is a single
 // linear pass that preserves the runtime-vs-files separation in the UI.
 function evidenceSurface(finding: ScanFinding): EvidenceSurface {
-  return finding.module === "process_scanner" || finding.module === "memory_scanner"
+  return finding.module === "process_scanner" ||
+    finding.module === "memory_scanner" ||
+    finding.module === "account_inventory"
     ? "runtime"
     : "files";
 }
@@ -1080,7 +1224,7 @@ function evidenceSurfaceLabel(surface: EvidenceSurface): string {
 
 function evidenceSurfaceHelp(surface: EvidenceSurface): string {
   return surface === "runtime"
-    ? "Running processes and Roblox memory evidence from the current session."
+    ? "Verified account inventory, running processes, and Roblox memory evidence from the current session."
     : "On-disk files, client settings, and historical execution cache. Review separately from active use.";
 }
 

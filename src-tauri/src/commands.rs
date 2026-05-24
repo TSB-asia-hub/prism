@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Emitter;
 
-use crate::models::ScanReport;
+use crate::accounts::{account_inventory_findings, AccountStore};
+use crate::models::{ScanFinding, ScanReport};
 use crate::reports::report_generator;
 use crate::scanners;
 use crate::scanners::progress::{CancelToken, ScanProgress};
@@ -42,15 +43,22 @@ pub struct ImportedReport {
 pub async fn run_scan(
     app: tauri::AppHandle,
     cancel: tauri::State<'_, CancelToken>,
+    accounts: tauri::State<'_, AccountStore>,
 ) -> Result<ScanReport, String> {
     cancel.reset();
     let reporter = ScanProgress::new(app.clone(), cancel.inner().clone());
+    let account_store = accounts.inner().clone();
+    let partial_account_store = account_store.clone();
     let findings = scanners::run_all_scans_with_partial_progress(reporter, move |findings| {
-        let partial_report = report_generator::generate_report(findings);
+        let partial_report = report_generator::generate_report(with_account_inventory(
+            findings,
+            &partial_account_store,
+        ));
         let _ = app.emit("scan-report-partial", partial_report);
     })
     .await;
-    let report = report_generator::generate_report(findings);
+    let report =
+        report_generator::generate_report(with_account_inventory(findings, &account_store));
     Ok(report)
 }
 
@@ -63,6 +71,16 @@ pub async fn cancel_scan(cancel: tauri::State<'_, CancelToken>) -> Result<(), St
     Ok(())
 }
 
+fn with_account_inventory(
+    mut findings: Vec<ScanFinding>,
+    accounts: &AccountStore,
+) -> Vec<ScanFinding> {
+    if let Ok(accounts) = accounts.list() {
+        findings.extend(account_inventory_findings(&accounts));
+    }
+    findings
+}
+
 /// Save a freshly-generated, in-memory-signed report to disk. The frontend
 /// CANNOT supply the report content — `save_report` re-runs scanners and
 /// signs the result internally, so a tampered webview cannot persist a
@@ -71,9 +89,13 @@ pub async fn cancel_scan(cancel: tauri::State<'_, CancelToken>) -> Result<(), St
 /// or empty the report falls back to a timestamped file on the desktop.
 /// Returns the absolute file path where the report was actually saved.
 #[tauri::command]
-pub async fn save_report(path: Option<String>) -> Result<String, String> {
+pub async fn save_report(
+    path: Option<String>,
+    accounts: tauri::State<'_, AccountStore>,
+) -> Result<String, String> {
     let findings = scanners::run_all_scans().await;
-    let report = report_generator::generate_report(findings);
+    let report =
+        report_generator::generate_report(with_account_inventory(findings, accounts.inner()));
     report_generator::save_report(&report, path.as_deref())
 }
 
