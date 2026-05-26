@@ -12,7 +12,7 @@ Tournament players run this scanner before matches. Staff review the generated r
 
 ## Why this exists
 
-Roblox's September 2025 FFlag allowlist (the "18 official flags") restricts which Fast Flags players can override via `ClientAppSettings.json`, but determined players bypass it using memory injectors and offset-based tools that write FFlag values directly into Roblox's heap at runtime. Modified Fast Flags remain a major integrity threat for competitive Roblox — desync, physics manipulation, visual exploits, and animation hiding all stem from FFlag abuse.
+Roblox's September 2025 FFlag allowlist (the "18 official flags") restricts which Fast Flags players can override via `ClientAppSettings.json`, but the file-based allowlist is only one of several places a player can land an override — bootstrapper configs, injector configs, and dropped tool artifacts all leave traces. Modified Fast Flags remain a major integrity threat for competitive Roblox — desync, physics manipulation, visual exploits, and animation hiding all stem from FFlag abuse.
 
 The Strongest Battlegrounds competitive scene currently lacks a dedicated FFlag screening tool. This is one.
 
@@ -39,25 +39,15 @@ Every detected FFlag is classified against:
 - **Unknown** — flag-shaped overrides not in the database, emitted as Clean informational entries so staff can review them without turning an outdated local database into a warning by itself.
 
 ### Prefetch Scanner (Windows)
-Reads `C:\Windows\Prefetch\*.pf` to detect execution history of known tools — catches players who uninstall tools before running the scanner.
-
-### Memory Scanner (Windows)
-Reads Roblox's process memory to detect runtime FFlag injections that bypass the file-based allowlist:
-- Uses `OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION)`, `VirtualQueryEx`, and `ReadProcessMemory` against committed non-image regions.
-- Skips `MEM_IMAGE` regions to avoid false positives from FFlag string literals living in the unmodified `.text` segment.
-- Refuses to scan a Roblox-named process whose executable path is outside a trusted Roblox install root (closes the decoy attack: dropping a renamed empty binary called `RobloxPlayerBeta.exe` no longer redirects the scan to it).
-- Trusted UWP roots are scoped to the `ROBLOXCORPORATION.` package family, not the entire `WindowsApps` / `Packages` store.
-
-The macOS memory path is intentionally **not implemented** in this build. Detection on macOS relies on the file/process/prefetch/client-settings scanners only.
+Reads `C:\Windows\Prefetch\*.pf` to detect execution history of known tools — catches players who uninstall tools before running the scanner. Requires admin (the manifest requests `requireAdministrator` on launch so the OS prompts up front).
 
 ---
 
 ## What this scanner does NOT detect (be honest)
 
-- **Cheats that patch FFlag *values* after the string literal has been freed** — if the integer is modified in memory but no name string remains, the memory scanner has nothing to match.
+- **Runtime-only memory-resident FFlag injection** — overrides written directly into the Roblox process's heap (via `WriteProcessMemory` and similar) that never touch disk or any config file. Detecting this would require Prism to call `ReadProcessMemory` against `RobloxPlayerBeta.exe`, which Hyperion (Byfron) treats as cheat-tool behaviour and has been observed to result in player bans. Prism intentionally does not do this. The process / file / client-settings / prefetch scanners still catch the surrounding artifacts (the injector binary, the config that staged the injection, prior executions), but the bare in-memory value-write itself is out of scope.
 - **VM / second-machine setups** — the scanner only sees the machine it's running on.
 - **Compromised allowlisted-flag values** — Roblox permits the 18 allowlisted flags to be set; the scanner does not check whether their *values* are abusive.
-- **Hyperion-mediated obfuscation** — Hyperion (Byfron) on Windows is user-mode and does not block third-party `ReadProcessMemory` against `RobloxPlayerBeta.exe` (per Roblox staff statement, https://devforum.roblox.com/t/4510318), but it does encrypt the `.text` section. The scanner skips `MEM_IMAGE` so this doesn't cause false negatives — but if a future Hyperion update kernel-blocks RPM, the Windows memory path will return nothing useful.
 
 ---
 
@@ -73,8 +63,8 @@ Each scan generates a JSON report:
 ### Verdict tiers
 
 - **`Clean`** — no evidence of FFlag abuse on any scanner path.
-- **`Suspicious`** — evidence consistent with abuse, but the signal alone is not strong enough to auto-accuse. Requires operator review before any tournament action. The heap string-scan value-match path is **deliberately capped at Suspicious** — it can never auto-Flag — so that a future curated-rule misclassification, a rare vanilla heap coincidence, or any other low-confidence signal cannot directly cost a player their entry.
-- **`Flagged`** — high-confidence evidence: injector tool markers within the proximity window of a known-suspicious flag, a live FastFlag registry override carrying a curated cheat value, or equivalent multi-signal corroboration. Tournaments may treat this as ship-blocking.
+- **`Suspicious`** — evidence consistent with abuse, but the signal alone is not strong enough to auto-accuse. Requires operator review before any tournament action.
+- **`Flagged`** — high-confidence evidence: a non-allowlisted FFlag override in ClientAppSettings.json or a bootstrapper config carrying a curated cheat value, a running injector / executor process alongside Roblox, or equivalent multi-signal corroboration. Tournaments may treat this as ship-blocking.
 
 Reports are saved (or to the location chosen via the Save-As dialog) as `Prism_Report_{timestamp}.json`.
 
@@ -162,8 +152,7 @@ prism/
 │   │   │   ├── process_scanner.rs
 │   │   │   ├── file_scanner.rs
 │   │   │   ├── client_settings_scanner.rs
-│   │   │   ├── prefetch_scanner.rs
-│   │   │   └── memory_scanner.rs
+│   │   │   └── prefetch_scanner.rs
 │   │   ├── reports/
 │   │   │   └── report_generator.rs
 │   │   └── data/
@@ -182,7 +171,7 @@ prism/
 
 ## Known limitations
 
-- **Memory-only FFlag changes are invisible if the integer is patched without a residual string** — see "What this scanner does NOT detect" above.
+- **Runtime-only memory-resident FFlag injection is undetected** — see "What this scanner does NOT detect" above for why Prism intentionally does not scan Roblox's process memory.
 - **Players can use VMs or alt machines** to bypass PC scanning entirely.
 - **Tool signature lists require ongoing maintenance** as new bypass tools emerge. The 2026 executor list (Wave / Solara / Hydrogen / etc.) was current at last verify; check `src-tauri/src/data/known_tools.rs` for the canonical set and update as the ecosystem changes.
 - **The HMAC key is in the binary.** Per-build randomization helps but does not eliminate the fundamental client-side-key problem; for high-stakes use, validate reports server-side.

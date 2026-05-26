@@ -47,7 +47,6 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo test --no-fail-fast
-          cargo test --manifest-path tools/memory_evidence_exporter/Cargo.toml --no-fail-fast
 
   build:
     name: Build (${{ matrix.os }})

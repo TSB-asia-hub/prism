@@ -21,12 +21,13 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <!-- Always launch elevated. The memory scanner needs PROCESS_VM_READ
-             on the Roblox process; without admin / debug privilege Windows
-             returns ERROR_ACCESS_DENIED on OpenProcess and the scan emits
-             Inconclusive instead of producing real findings. Forcing the
-             UAC prompt up front means the operator never has to remember
-             to right-click → Run as administrator. -->
+        <!-- Always launch elevated. The prefetch scanner needs to read
+             C:\Windows\Prefetch, which UAC medium-IL processes cannot
+             open; without admin the prefetch path falls back to a
+             "skipped — requires administrator" finding and the
+             historical-execution signal is lost. Forcing the UAC prompt
+             up front means the operator never has to remember to
+             right-click → Run as administrator. -->
         <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>

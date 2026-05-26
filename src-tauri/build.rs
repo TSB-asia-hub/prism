@@ -47,12 +47,13 @@ fn main() {
 
     // Embed a Windows application manifest. In release builds we request
     // `requireAdministrator` so the OS prompts for UAC on every launch and
-    // the resulting process has the privileges the memory scanner needs
-    // (PROCESS_VM_READ on the Roblox process). In debug builds we fall
-    // back to `asInvoker` — `cargo tauri dev` runs the exe non-elevated
-    // and Windows refuses to silently elevate, returning ERROR_ELEVATION
-    // _REQUIRED (740) and breaking hot-reload. The dev variant still pulls
-    // in Common Controls 6.0 so WebView2 can resolve TaskDialogIndirect.
+    // the resulting process has the privileges the prefetch scanner needs
+    // to read C:\Windows\Prefetch (medium-IL processes can't open it). In
+    // debug builds we fall back to `asInvoker` — `cargo tauri dev` runs
+    // the exe non-elevated and Windows refuses to silently elevate,
+    // returning ERROR_ELEVATION_REQUIRED (740) and breaking hot-reload.
+    // The dev variant still pulls in Common Controls 6.0 so WebView2 can
+    // resolve TaskDialogIndirect.
     #[cfg(feature = "ui")]
     {
         let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());

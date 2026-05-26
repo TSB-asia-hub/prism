@@ -8,7 +8,7 @@ default-run = "prism"
 autobins = false
 
 [workspace]
-members = [".", "tools/memory_evidence_exporter", "tools/memory_scan_harness"]
+members = ["."]
 default-members = ["."]
 resolver = "2"
 
@@ -25,8 +25,8 @@ tauri-build = { version = "2", features = [], optional = true }
 
 [features]
 default = ["ui"]
-# Pulls in the Tauri runtime + plugins. Disable in dev tools that only
-# want to call into the scanner library (e.g. tools/memory_scan_harness).
+# Pulls in the Tauri runtime + plugins. Disable when running cargo tests
+# on environments without GTK / WebView2 system libraries.
 ui = [
     "dep:tauri",
     "dep:tauri-plugin-opener",
@@ -49,19 +49,9 @@ chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Fast multi-pattern search + byte skip + work-stealing parallelism.
-# Used by the memory scanner to turn an O(N × patterns) string search
-# into O(N), and to fan scan-region work across CPU cores.
+# Used by the file scanner to turn an O(N × patterns) tool-marker search
+# into O(N), and to fan per-file content scans across CPU cores.
 aho-corasick = "1"
 memchr = "2"
 rayon = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
-
-[target.'cfg(windows)'.dependencies]
-# Microsoft's official bindings, replacing the unmaintained winapi 0.3.
-windows-sys = { version = "0.60", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_System_Memory",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Diagnostics_Debug",
-] }
