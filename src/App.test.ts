@@ -4,13 +4,11 @@ import {
   emptyProgress,
   findingKey,
   formatAccountLabel,
-  formatBytes,
   groupByVerdict,
   hasTauriRuntime,
   importBadgeTitle,
   parseFindingDetails,
   pathFieldAction,
-  parseMemoryFlagEvidence,
   providerLabel,
   relativeTime,
   shortTime,
@@ -38,7 +36,6 @@ describe("App UI helpers", () => {
       file_scanner: { state: "pending" },
       client_settings_scanner: { state: "pending" },
       prefetch_scanner: { state: "pending" },
-      memory_scanner: { state: "pending" },
     });
   });
 
@@ -101,71 +98,6 @@ describe("App UI helpers", () => {
     });
   });
 
-  it("parses the v0.10.0 aggregated bare-key bridge summary", () => {
-    // Lock in compatibility with the format `inspect_generic_singleton_overrides`
-    // emits as of v0.10.0: a single Flagged finding whose details contain
-    // a multi-line `Detected flags: \n- Name = Value` list plus a per-flag
-    // context annotation field. The frontend's `.memory-flags` accordion
-    // depends on this shape parsing into the per-row flag list.
-    const result = parseMemoryFlagEvidence(
-      finding("Flagged", {
-        module: "memory_scanner",
-        description: "Live FastFlag registry injection: 3 flag(s) detected",
-        details:
-          "PID: 7156 | Singleton candidates: 1 | FFlag-shaped entries walked: 27377 | Entries inspected: 13297 | Source breakdown: cheat-rule 1 / baseline 1 / tracker 1 | Detected flags: \n- DFIntS2PhysicsSenderRate = 30\n- DFIntMaxDataPacketPerSend = 100000\n- DFIntRaknetBandwidthInfluxHundredthsPercentageV2 = 10000\n | Per-flag context: DFIntS2PhysicsSenderRate (vanilla 15, via baseline); DFIntMaxDataPacketPerSend (vanilla vanilla, via cheat-rule); DFIntRaknetBandwidthInfluxHundredthsPercentageV2 (vanilla 100, via tracker) | Detection: walked the Roblox FastFlag hash table via the bare-key bucket walk",
-      }),
-    );
-
-    expect(result).not.toBeNull();
-    expect(result!.flags).toEqual([
-      { name: "DFIntS2PhysicsSenderRate", value: "30" },
-      { name: "DFIntMaxDataPacketPerSend", value: "100000" },
-      {
-        name: "DFIntRaknetBandwidthInfluxHundredthsPercentageV2",
-        value: "10000",
-      },
-    ]);
-    expect(result!.detection).toContain("bare-key bucket walk");
-  });
-
-  it("extracts memory scanner flags from grouped detected-flag details", () => {
-    const result = parseMemoryFlagEvidence(
-      finding("Flagged", {
-        module: "memory_scanner",
-        description: "Critical live Roblox runtime-variable overrides",
-        details:
-          "Detected flags: 2 total\n- DFIntS2PhysicsSenderRate=1\n- DFFlagAssemblyExtentsExpansionStudHundredth=-50 | Detection: live memory",
-      }),
-    );
-
-    expect(result).toEqual({
-      flags: [
-        { name: "DFIntS2PhysicsSenderRate", value: "1" },
-        { name: "DFFlagAssemblyExtentsExpansionStudHundredth", value: "-50" },
-      ],
-      detection: "live memory",
-    });
-  });
-
-  it("cleans legacy memory matches by dropping addresses and defaults", () => {
-    const result = parseMemoryFlagEvidence(
-      finding("Flagged", {
-        module: "memory_scanner",
-        description: "Critical live Roblox runtime-variable overrides",
-        details:
-          "PID: 1848 | Matches: DFIntA=9999 @0x7FF, DFIntB=1 (file default 15) @0x800 | Detection: cache",
-      }),
-    );
-
-    expect(result).toEqual({
-      flags: [
-        { name: "DFIntA", value: "9999" },
-        { name: "DFIntB", value: "1" },
-      ],
-      detection: "cache",
-    });
-  });
-
   it("splits comma detail fields only at capitalized key boundaries", () => {
     expect(
       parseFindingDetails("Path: C:\\Roblox, Player\\Client.exe, Hash: abc123"),
@@ -215,17 +147,6 @@ describe("App UI helpers", () => {
     });
   });
 
-  it("does not create folder actions for runtime evidence", () => {
-    expect(
-      pathFieldAction(
-        finding("Flagged", {
-          module: "memory_scanner",
-          details: "Path: C:\\Users\\<user>\\Injected.dll | PID: 1234",
-        }),
-      ),
-    ).toBeNull();
-  });
-
   it("formats verified account labels", () => {
     expect(providerLabel("discord")).toBe("Discord");
     expect(
@@ -237,13 +158,6 @@ describe("App UI helpers", () => {
     expect(
       formatAccountLabel({ username: "ev", display_name: null }),
     ).toBe("ev");
-  });
-
-  it("formats byte counts across scanner progress units", () => {
-    expect(formatBytes(1023)).toBe("1023 B");
-    expect(formatBytes(1024)).toBe("1 KiB");
-    expect(formatBytes(1024 * 1024)).toBe("1.0 MiB");
-    expect(formatBytes(1024 * 1024 * 1024)).toBe("1.00 GiB");
   });
 
   it("formats import badge titles with signature and staleness state", () => {

@@ -23,7 +23,6 @@ const SCANNERS: { id: string; label: string }[] = [
   { id: "file_scanner", label: "file system" },
   { id: "client_settings_scanner", label: "client settings" },
   { id: "prefetch_scanner", label: "prefetch cache" },
-  { id: "memory_scanner", label: "memory regions" },
 ];
 
 type ScannerState = "pending" | "running" | "done" | "errored";
@@ -31,9 +30,6 @@ type ScannerState = "pending" | "running" | "done" | "errored";
 type ScannerProgress = {
   state: ScannerState;
   findings?: number;
-  // memory_scanner only: bytes scanned so far during the walk
-  bytesScanned?: number;
-  regionsScanned?: number;
   errorMessage?: string;
 };
 
@@ -42,12 +38,6 @@ type ProgressMap = Record<string, ScannerProgress>;
 type ScanProgressEvent =
   | { kind: "started"; scanner: string }
   | { kind: "done"; scanner: string; findings: number }
-  | {
-    kind: "heartbeat";
-    scanner: string;
-    regions_scanned: number;
-    bytes_scanned: number;
-  }
   | { kind: "errored"; scanner: string; message: string };
 
 type FieldAction = {
@@ -135,7 +125,6 @@ function AppInner() {
   const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
   const [accounts, setAccounts] = useState<AccountIdentity[]>([]);
   const scanInFlight = useRef(false);
-  const progressHeartbeatRef = useRef<Record<string, { at: number; bytesScanned: number }>>({});
 
   // Apply theme to the root element so global CSS variables can switch
   // via `:root[data-theme="light"]`. Persist to localStorage so the
@@ -196,42 +185,9 @@ function AppInner() {
     if (phase !== "scanning") return;
     if (!hasTauriRuntime()) return;
     let unlistenProgress: UnlistenFn | null = null;
-    let unlistenPartial: UnlistenFn | null = null;
     let cancelled = false;
-    progressHeartbeatRef.current = {};
     listen<ScanProgressEvent>("scan-progress", (event) => {
       const payload = event.payload;
-      if (payload.kind === "heartbeat") {
-        const last = progressHeartbeatRef.current[payload.scanner];
-        const now = Date.now();
-        const bytesDelta = Math.abs(payload.bytes_scanned - (last?.bytesScanned ?? 0));
-        if (last && now - last.at < 750 && bytesDelta < 32 * 1024 * 1024) return;
-        progressHeartbeatRef.current[payload.scanner] = {
-          at: now,
-          bytesScanned: payload.bytes_scanned,
-        };
-        setProgress((prev) => {
-          const current = prev[payload.scanner] ?? { state: "pending" };
-          if (current.state === "done" || current.state === "errored") return prev;
-          if (
-            current.state === "running" &&
-            current.regionsScanned === payload.regions_scanned &&
-            current.bytesScanned === payload.bytes_scanned
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            [payload.scanner]: {
-              ...current,
-              state: "running",
-              regionsScanned: payload.regions_scanned,
-              bytesScanned: payload.bytes_scanned,
-            },
-          };
-        });
-        return;
-      }
       setProgress((prev) => {
         const current = prev[payload.scanner] ?? { state: "pending" };
         switch (payload.kind) {
@@ -267,27 +223,11 @@ function AppInner() {
         unlistenProgress = fn;
       }
     });
-    listen<ScanReport>("scan-report-partial", (event) => {
-      setReport(event.payload);
-      // The partial emit lands after the four fast scanners complete, at
-      // which point account_inventory has already discovered + enriched
-      // and written the result into the store. Pulling here lets the
-      // AccountInventory section populate before the memory walk
-      // finishes, instead of waiting for the final report.
-      void refreshAccounts();
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlistenPartial = fn;
-      }
-    });
     return () => {
       cancelled = true;
       if (unlistenProgress) unlistenProgress();
-      if (unlistenPartial) unlistenPartial();
     };
-  }, [phase, refreshAccounts]);
+  }, [phase]);
 
   useEffect(() => {
     if (!toast) return;
@@ -318,7 +258,6 @@ function AppInner() {
     setOpenKey(null);
     setFilter("all");
     setEvidenceFilter("all");
-    progressHeartbeatRef.current = {};
     setProgress(emptyProgress());
     try {
       const result = await invoke<ScanReport>("run_scan");
@@ -814,13 +753,6 @@ function AccountInventory({
 
 /* ——————————————————————————————————————————————————————————— */
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KiB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
-
 function Summary({
   phase,
   report,
@@ -889,10 +821,6 @@ function Summary({
               {SCANNERS.map((s) => {
                 const p = progress[s.id];
                 const state = p?.state ?? "pending";
-                const mem =
-                  s.id === "memory_scanner" && state === "running" && p?.bytesScanned
-                    ? ` ${formatBytes(p.bytesScanned)} / ${p.regionsScanned ?? 0} regions`
-                    : "";
                 const count =
                   state === "done" && typeof p?.findings === "number"
                     ? ` ${p.findings}`
@@ -917,7 +845,7 @@ function Summary({
                       {state === "done"
                         ? count
                         : state === "running"
-                          ? mem || "…"
+                          ? "…"
                           : state === "errored"
                             ? "error"
                             : ""}
@@ -1179,7 +1107,6 @@ function Workarea({
 // linear pass that preserves the runtime-vs-files separation in the UI.
 function evidenceSurface(finding: ScanFinding): EvidenceSurface {
   return finding.module === "process_scanner" ||
-    finding.module === "memory_scanner" ||
     finding.module === "account_inventory"
     ? "runtime"
     : "files";
@@ -1191,7 +1118,7 @@ function evidenceSurfaceLabel(surface: EvidenceSurface): string {
 
 function evidenceSurfaceHelp(surface: EvidenceSurface): string {
   return surface === "runtime"
-    ? "Verified account inventory, running processes, and Roblox memory evidence from the current session."
+    ? "Verified account inventory and running processes from the current session."
     : "On-disk files, client settings, and historical execution cache. Review separately from active use.";
 }
 
@@ -1399,12 +1326,11 @@ const FindingRow = memo(function FindingRow({
 // Parse a finding's `details` string into a list of {label, value} pairs so
 // the UI can render them as a clean two-column grid instead of a single
 // `Key: foo | Key: bar | Key: baz` line. Backend scanners use either ` | `
-// (memory_scanner) or `, ` (file_scanner) as the separator between KV
-// segments — for the comma form we only split when the next segment looks
-// like a `Capitalized-key:` so commas inside paths or notes don't shred
-// values. Anything that doesn't parse as KV is rendered as a freeform note.
+// or `, ` as the separator between KV segments — for the comma form we
+// only split when the next segment looks like a `Capitalized-key:` so
+// commas inside paths or notes don't shred values. Anything that doesn't
+// parse as KV is rendered as a freeform note.
 type DetailField = { label: string; value: string };
-type MemoryFlagValue = { name: string; value: string };
 
 export function parseFindingDetails(details: string): {
   fields: DetailField[];
@@ -1441,79 +1367,6 @@ export function parseFindingDetails(details: string): {
   };
 }
 
-function splitMemoryFlagChunks(value: string): string[] {
-  const withoutCount = value.replace(/^\s*\d+\s+total\s*/i, "").trim();
-  if (!withoutCount) return [];
-  const bulletLines = withoutCount
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("-"));
-  if (bulletLines.length > 0) return bulletLines;
-  return withoutCount
-    .split(/,\s+(?=[A-Za-z][A-Za-z0-9_]*\s*=)/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-}
-
-function parseMemoryFlagChunk(chunk: string): MemoryFlagValue | null {
-  const normalized = chunk
-    .replace(/^\s*-\s*/, "")
-    .replace(/\s+@0x[0-9a-fA-F]+\s*$/, "")
-    .replace(/\s+\(file default [^)]+\)\s*$/i, "")
-    .trim();
-  const match = normalized.match(/^([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
-  if (!match) return null;
-  const name = match[1].trim();
-  const value = match[2].trim().replace(/\s+@0x[0-9a-fA-F]+.*$/, "");
-  if (!name || !value) return null;
-  return { name, value };
-}
-
-function parseDescriptionFlag(description: string): MemoryFlagValue | null {
-  const match = description.match(/"([A-Za-z][A-Za-z0-9_]*)"\s*=\s*([^\s]+)/);
-  if (!match) return null;
-  return { name: match[1], value: match[2].replace(/[),.;]+$/, "") };
-}
-
-export function parseMemoryFlagEvidence(finding: Pick<ScanFinding, "module" | "description" | "details">): {
-  flags: MemoryFlagValue[];
-  detection: string | null;
-} | null {
-  if (finding.module !== "memory_scanner") return null;
-  const fields = finding.details ? parseFindingDetails(finding.details).fields : [];
-  const flagLabels = new Set([
-    "Detected flags",
-    "Injected flags",
-    "Live flags",
-    "Matches",
-    "Exact curated matches",
-    "Uncurated changed cached values",
-  ]);
-  const flags: MemoryFlagValue[] = [];
-  for (const field of fields) {
-    if (!flagLabels.has(field.label)) continue;
-    for (const chunk of splitMemoryFlagChunks(field.value)) {
-      const flag = parseMemoryFlagChunk(chunk);
-      if (flag) flags.push(flag);
-    }
-  }
-  if (flags.length === 0) {
-    const fromDescription = parseDescriptionFlag(finding.description);
-    if (fromDescription) flags.push(fromDescription);
-  }
-  if (flags.length === 0) return null;
-
-  const seen = new Set<string>();
-  const uniqueFlags = flags.filter((flag) => {
-    const key = `${flag.name}\0${flag.value}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  const detection = fields.find((field) => field.label === "Detection")?.value ?? null;
-  return { flags: uniqueFlags, detection };
-}
-
 export function pathFieldAction(finding: ScanFinding): FieldAction | null {
   if (evidenceSurface(finding) !== "files" || !finding.details) {
     return null;
@@ -1539,10 +1392,6 @@ function FindingDetails({ finding }: { finding: ScanFinding }) {
   const parsed = useMemo(
     () => (details ? parseFindingDetails(details) : null),
     [details],
-  );
-  const memoryEvidence = useMemo(
-    () => parseMemoryFlagEvidence(finding),
-    [finding],
   );
   const handleCopy = useCallback(
     async (e: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1572,30 +1421,6 @@ function FindingDetails({ finding }: { finding: ScanFinding }) {
       </button>
     </div>
   );
-  if (memoryEvidence) {
-    return (
-      <>
-        {copyButton}
-        <div className="memory-flags">
-          <div className="memory-flags__header">
-            <span>Detected flags</span>
-            <span>{memoryEvidence.flags.length}</span>
-          </div>
-          <div className="memory-flags__list">
-            {memoryEvidence.flags.map((flag, i) => (
-              <div className="memory-flag" key={`${flag.name}-${flag.value}-${i}`}>
-                <span className="memory-flag__name">{flag.name}</span>
-                <span className="memory-flag__value">{flag.value}</span>
-              </div>
-            ))}
-          </div>
-          {memoryEvidence.detection && (
-            <p className="memory-flags__note">{memoryEvidence.detection}</p>
-          )}
-        </div>
-      </>
-    );
-  }
   if (!details || !parsed) {
     return <span className="row__details-empty">No additional details.</span>;
   }

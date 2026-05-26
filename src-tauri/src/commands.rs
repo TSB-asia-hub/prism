@@ -1,7 +1,6 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::Emitter;
 
 use crate::accounts::{account_inventory, account_inventory_findings, AccountStore};
 use crate::models::{ScanFinding, ScanReport};
@@ -46,17 +45,9 @@ pub async fn run_scan(
     accounts: tauri::State<'_, AccountStore>,
 ) -> Result<ScanReport, String> {
     cancel.reset();
-    let reporter = ScanProgress::new(app.clone(), cancel.inner().clone());
+    let reporter = ScanProgress::new(app, cancel.inner().clone());
     let account_store = accounts.inner().clone();
-    let partial_account_store = account_store.clone();
-    let findings = scanners::run_all_scans_with_partial_progress(reporter, move |findings| {
-        let partial_report = report_generator::generate_report(with_account_inventory(
-            findings,
-            &partial_account_store,
-        ));
-        let _ = app.emit("scan-report-partial", partial_report);
-    })
-    .await;
+    let findings = scanners::run_all_scans_with_progress(reporter).await;
     let report =
         report_generator::generate_report(with_account_inventory(findings, &account_store));
     Ok(report)

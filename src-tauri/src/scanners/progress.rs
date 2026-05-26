@@ -1,7 +1,3 @@
-// On non-Windows builds the heartbeat path is unused (memory_scanner stub
-// skips the walk), so silence the dead-code warnings that only apply there.
-#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
-
 //! Scan-progress reporting.
 //!
 //! Wraps an optional `tauri::AppHandle` so scanners can emit live progress
@@ -28,11 +24,6 @@ pub enum ScanProgressEvent {
     Done {
         scanner: &'static str,
         findings: usize,
-    },
-    Heartbeat {
-        scanner: &'static str,
-        regions_scanned: usize,
-        bytes_scanned: u64,
     },
     Errored {
         scanner: &'static str,
@@ -104,14 +95,6 @@ impl ScanProgress {
 
     pub fn done(&self, scanner: &'static str, findings: usize) {
         self.emit(ScanProgressEvent::Done { scanner, findings });
-    }
-
-    pub fn heartbeat(&self, scanner: &'static str, regions_scanned: usize, bytes_scanned: u64) {
-        self.emit(ScanProgressEvent::Heartbeat {
-            scanner,
-            regions_scanned,
-            bytes_scanned,
-        });
     }
 
     pub fn errored(&self, scanner: &'static str, message: String) {

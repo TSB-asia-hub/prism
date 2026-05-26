@@ -1,6 +1,5 @@
 pub mod client_settings_scanner;
 pub mod file_scanner;
-pub mod memory_scanner;
 pub mod prefetch_scanner;
 pub mod process_scanner;
 pub mod progress;
@@ -12,32 +11,16 @@ use tokio::task::JoinHandle;
 
 /// Run all scanners and collect findings, emitting live progress events
 /// to `reporter`. Each scanner is dispatched via `spawn_blocking` so its
-/// synchronous I/O (sysinfo, WalkDir, std::fs, winapi) does not stall the
-/// tokio runtime worker — this also gives us real concurrency, not the
-/// implicit serialization that `tokio::join!` of blocking-bodied async fns
-/// would produce.
+/// synchronous I/O (sysinfo, WalkDir, std::fs) does not stall the tokio
+/// runtime worker — this also gives us real concurrency, not the implicit
+/// serialization that `tokio::join!` of blocking-bodied async fns would
+/// produce.
 ///
 /// Progress events fire in this shape per scanner:
 /// - `Started { scanner }` when the spawn_blocking is dispatched.
-/// - `Heartbeat { ... }` only from memory_scanner, every ~500ms.
 /// - `Done { scanner, findings }` when the task completes cleanly.
 /// - `Errored { scanner, message }` when the task panics.
 pub async fn run_all_scans_with_progress(reporter: ScanProgress) -> Vec<ScanFinding> {
-    run_all_scans_with_partial_progress(reporter, |_| {}).await
-}
-
-/// Run every scanner, calling `on_non_memory_done` as soon as the faster
-/// non-memory scanners have completed. The memory scanner is still running in
-/// parallel while the callback fires, allowing UI callers to publish early
-/// findings without waiting for the memory walk.
-pub async fn run_all_scans_with_partial_progress<F>(
-    reporter: ScanProgress,
-    on_non_memory_done: F,
-) -> Vec<ScanFinding>
-where
-    F: FnOnce(Vec<ScanFinding>),
-{
-    // Kick off all scanners in parallel, emitting Started as each is dispatched.
     let process_reporter = reporter.clone();
     let process_handle = {
         reporter.started("process_scanner");
@@ -73,33 +56,18 @@ where
         })
     };
 
-    // Memory scanner needs the reporter to emit heartbeats during its walk.
-    let memory_reporter = reporter.clone();
-    let memory_handle = {
-        reporter.started("memory_scanner");
-        tokio::task::spawn_blocking(move || {
-            futures_block_on(memory_scanner::scan_with_progress(memory_reporter))
-        })
-    };
-
-    let mut non_memory_findings = Vec::new();
+    let mut findings = Vec::new();
     for (scanner_id, handle) in [
         ("process_scanner", process_handle),
         ("file_scanner", file_handle),
         ("client_settings_scanner", client_handle),
         ("prefetch_scanner", prefetch_handle),
     ] {
-        let mut findings = await_scanner(scanner_id, handle, &reporter).await;
-        non_memory_findings.append(&mut findings);
+        let mut scanner_findings = await_scanner(scanner_id, handle, &reporter).await;
+        findings.append(&mut scanner_findings);
     }
 
-    let non_memory_findings = drop_stale_file_path_findings(non_memory_findings);
-    on_non_memory_done(non_memory_findings.clone());
-
-    let mut all_findings = non_memory_findings;
-    let mut memory_findings = await_scanner("memory_scanner", memory_handle, &reporter).await;
-    all_findings.append(&mut memory_findings);
-    drop_stale_file_path_findings(all_findings)
+    drop_stale_file_path_findings(findings)
 }
 
 /// Convenience wrapper that runs every scanner with progress reporting

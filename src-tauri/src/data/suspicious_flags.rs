@@ -250,7 +250,7 @@ pub static HIGH_FLAGS: &[&str] = &[
     "FFlagDebugForceFutureIsBrightPhase2",
     "FFlagDebugForceFutureIsBrightPhase3",
     // (FFlagRenderUnifiedLighting6 and FFlagUnifiedLightingBetaFeature are
-    // Roblox-shipped unified-lighting rollout gates; see MEMORY_BASELINE_FLAGS.
+    // Roblox-shipped unified-lighting rollout gates; see the Roblox-shipped baseline (not tracked).
     // They are present in vanilla client memory on every run and setting
     // them in ClientAppSettings does not confer competitive advantage. Do
     // not re-add without a documented cheat-value for the suspicious DB.)
@@ -264,7 +264,7 @@ pub static HIGH_FLAGS: &[&str] = &[
     // ---- GUI hiding for competitive advantage ----
     // (FFlagUserShowGuiHideToggles / FFlagGuiHidingApiSupport2 /
     // DFIntCanHideGuiGroupId are the shipped Roblox GUI-hide accessibility
-    // API — moved to MEMORY_BASELINE_FLAGS. Force-hiding HUD via debug
+    // API — moved to the Roblox-shipped baseline (not tracked). Force-hiding HUD via debug
     // flags is still a real knob, so the following two stay.)
     // Dont render screen GUI (hide all UI overlays)
     "FFlagDebugDontRenderScreenGui",
@@ -313,10 +313,10 @@ pub static HIGH_FLAGS: &[&str] = &[
     "DFFlagDebugDisableTimeoutDisconnect",
     // (FFlagReconnectDisabled / FStringReconnectDisabledReason are
     // Roblox-side kill-switches; client-local values are ignored by the
-    // server. Moved to MEMORY_BASELINE_FLAGS.)
+    // server. Moved to the Roblox-shipped baseline (not tracked).)
 
     // (FFlagDataModelPatcherForceLocal is an internal migration toggle,
-    // not a cheat vector — moved to MEMORY_BASELINE_FLAGS.)
+    // not a cheat vector — moved to the Roblox-shipped baseline (not tracked).)
 
     // ---- UGC avatar-validation bypass (hitbox / clipping abuse) ----
     // The public 2026 TSB/MxStrap config sets every `UGCValidate*`
@@ -415,7 +415,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // remain suspicious because user-chosen values drive the behavior.
     // The shipped feature-gate bools (`FFlagTaskSchedulerLimitTargetFpsTo2402`,
     // `FFlagGameBasicSettingsFramerateCap*`) are Roblox's own rollout
-    // toggles — presence in heap is expected; moved to MEMORY_BASELINE_FLAGS.
+    // toggles — presence in heap is expected; moved to the Roblox-shipped baseline (not tracked).
     "DFIntTaskSchedulerTargetFps",
     "FIntTargetRefreshRate",
     "FIntRefreshRateLowerBound",
@@ -429,7 +429,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FFlagDebugDisableTelemetryV2Stat",
     // (FFlagAdServiceEnabled is a privacy/preference toggle that Bloxstrap
     // ships disabled by default — no competitive-advantage. Moved to
-    // MEMORY_BASELINE_FLAGS.)
+    // the Roblox-shipped baseline (not tracked).)
 
     // ---- Network optimization (potential desync at extreme values) ----
     // FFlagOptimize* boolean rollouts are Roblox-side staged rollouts;
@@ -449,14 +449,14 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // (DFIntDebugFRMQualityLevelOverride is on Roblox's allowlist —
     // removed. `FFlagCommitToGraphicsQualityFix` and `FFlagFixGraphicsQuality`
     // are "Fix*" bug-fix toggles — shipped true by default — moved to
-    // MEMORY_BASELINE_FLAGS.)
+    // the Roblox-shipped baseline (not tracked).)
     "FIntRomarkStartWithGraphicQualityLevel",
     // ---- Light update frequency reduction ----
     "FIntRenderLocalLightUpdatesMax",
     "FIntRenderLocalLightUpdatesMin",
     "FIntRenderLocalLightFadeInMs",
     // (FFlagNewLightAttenuation is a Roblox rendering-rollout bool; moved
-    // to MEMORY_BASELINE_FLAGS. No meaningful competitive advantage from
+    // to the Roblox-shipped baseline (not tracked). No meaningful competitive advantage from
     // either state.)
 
     // ---- CSG LOD switching ----
@@ -472,7 +472,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FIntRuntimeMaxNumOfThreads",
     "FIntTaskSchedulerThreadMin",
     // (Render-threading assertion toggles were engine-internal correctness
-    // checks that slowed rendering if anything — moved to MEMORY_BASELINE_FLAGS.)
+    // checks that slowed rendering if anything — moved to the Roblox-shipped baseline (not tracked).)
 
     // ---- DPI scale manipulation ----
     // (DFFlagDisableDPIScale is allowlisted — removed.)
@@ -480,7 +480,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // ---- UI manipulation ----
     // (Chrome / in-game menu / bubble-chat / self-view / BETA-badge
     // rollouts are all Roblox-shipped UI A/B flags — moved to
-    // MEMORY_BASELINE_FLAGS. Keep numeric padding/blur knobs only.)
+    // the Roblox-shipped baseline (not tracked). Keep numeric padding/blur knobs only.)
     "FIntFontSizePadding",
     "FIntRobloxGuiBlurIntensity",
     // ---- Report abuse menu manipulation ----
@@ -488,7 +488,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FFlagEnableReportAbuseMenuRoact2",
     "FFlagEnableReportAbuseMenuLayerOnV3",
     // (FFlagDebugDisplayFPS is the Shift-F5 built-in overlay — user-facing
-    // documented feature, not a cheat — moved to MEMORY_BASELINE_FLAGS.)
+    // documented feature, not a cheat — moved to the Roblox-shipped baseline (not tracked).)
 
     // ---- Debug flag state display ----
     "FStringDebugShowFlagState",
@@ -510,17 +510,17 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     // ---- Order66 (misc debug flag) ----
     "DFFlagOrder66",
     // (Quaternion/RigScale animation-system corrections are Roblox-side
-    // migration fixes; moved to MEMORY_BASELINE_FLAGS.)
+    // migration fixes; moved to the Roblox-shipped baseline (not tracked).)
 
     // ---- Avatar chat visualization ----
     "FFlagDebugAvatarChatVisualization",
     // (FFlagFastGPULightCulling3 is a staged rendering-perf rollout; moved
-    // to MEMORY_BASELINE_FLAGS.)
+    // to the Roblox-shipped baseline (not tracked).)
 
     // ---- Deferred lighting disable ----
     "FFlagDebugDisableDeferredLighting",
     // (UIBlox theming and the low-FRM bloom fade are cosmetic Roblox
-    // rollouts; moved to MEMORY_BASELINE_FLAGS.)
+    // rollouts; moved to the Roblox-shipped baseline (not tracked).)
 
     // ---- Vis bug checks (can affect rendering) ----
     "DFFlagUseVisBugChecks",
@@ -529,7 +529,7 @@ pub static MEDIUM_FLAGS: &[&str] = &[
     "FIntEnableVisBugChecksHundredthPercent27",
     // (Quick-launch, chat /command autocomplete, and grass render fix are
     // shipped feature gates with no competitive effect; moved to
-    // MEMORY_BASELINE_FLAGS.)
+    // the Roblox-shipped baseline (not tracked).)
 
     // ---- Camera input type manipulation ----
     "FFlagUserCameraControlLastInputTypeUpdate",
