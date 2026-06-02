@@ -10,7 +10,7 @@ declare const __APP_VERSION__: string;
 const APP_VERSION =
   typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?";
 
-type Phase = "idle" | "scanning" | "complete";
+export type Phase = "idle" | "scanning" | "complete";
 type Filter = "all" | "flagged" | "suspicious" | "inconclusive" | "clean";
 type EvidenceFilter = "all" | "runtime" | "files";
 type EvidenceSurface = "runtime" | "files";
@@ -79,12 +79,20 @@ export function findingKey(f: ScanFinding): string {
 // shows an "IMPORTED" badge with signature/staleness status and disables
 // Export (re-exporting an imported file would re-run scanners and produce
 // an unrelated report — confusing for tournament-review workflows).
-type ImportMeta = {
+export type ImportMeta = {
   signatureValid: boolean;
   ageSeconds: number;
   stale: boolean;
   sourcePath: string;
 };
+
+export function shouldShowAccountInventory(
+  phase: Phase,
+  report: ScanReport | null,
+  importMeta: ImportMeta | null,
+): boolean {
+  return phase === "complete" && report !== null && importMeta === null;
+}
 
 type ImportPayload = {
   report: ScanReport;
@@ -439,6 +447,8 @@ function AppInner() {
     });
   }, [report, filter, evidenceFilter]);
 
+  const showAccountInventory = shouldShowAccountInventory(phase, report, importMeta);
+
   return (
     <div className="app">
       {!tauriReady && (
@@ -468,11 +478,13 @@ function AppInner() {
         counts={counts}
         progress={progress}
       />
-      <AccountInventory
-        accounts={accounts}
-        disabled={!tauriReady || phase === "scanning"}
-        onClear={clearAccounts}
-      />
+      {showAccountInventory && (
+        <AccountInventory
+          accounts={accounts}
+          disabled={!tauriReady}
+          onClear={clearAccounts}
+        />
+      )}
       <Workarea
         phase={phase}
         findings={ordered}
