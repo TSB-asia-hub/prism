@@ -11,6 +11,7 @@ import {
   pathFieldAction,
   providerLabel,
   relativeTime,
+  shouldShowAccountInventory,
   shortTime,
   truncate,
 } from "./App";
@@ -30,6 +31,30 @@ function finding(
 }
 
 describe("App UI helpers", () => {
+  it("shows account inventory only after a live scan completes", () => {
+    const report = {
+      scan_id: "scan",
+      timestamp: "2026-05-06T12:34:56.000Z",
+      machine_id: "machine",
+      os_info: "Windows 11",
+      overall_verdict: "Clean" as const,
+      findings: [],
+      hmac_signature: "sig",
+    };
+    const importMeta = {
+      signatureValid: true,
+      ageSeconds: 30,
+      stale: false,
+      sourcePath: "/tmp/report.json",
+    };
+
+    expect(shouldShowAccountInventory("idle", null, null)).toBe(false);
+    expect(shouldShowAccountInventory("scanning", report, null)).toBe(false);
+    expect(shouldShowAccountInventory("complete", null, null)).toBe(false);
+    expect(shouldShowAccountInventory("complete", report, importMeta)).toBe(false);
+    expect(shouldShowAccountInventory("complete", report, null)).toBe(true);
+  });
+
   it("builds pending progress entries for every backend scanner", () => {
     expect(emptyProgress()).toEqual({
       process_scanner: { state: "pending" },
