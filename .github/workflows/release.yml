@@ -55,8 +55,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-testbench
-            runs_on: '["self-hosted","Windows","X64","testbench","fflag-check"]'
+          - os: windows-2022
+            runs_on: '"windows-2022"'
             target: x86_64-pc-windows-msvc
             asset_suffix: 'windows-portable.exe'
           - os: macos-latest
